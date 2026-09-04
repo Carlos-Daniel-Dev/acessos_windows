@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="tela" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3a55"/>
+      <stop offset="1" stop-color="#16202f"/>
+    </linearGradient>
+  </defs>
+
+  <!-- monitor remoto -->
+  <rect x="6" y="10" width="42" height="30" rx="3" fill="url(#tela)"
+        stroke="#4c6ef5" stroke-width="2"/>
+  <rect x="10" y="14" width="34" height="4" rx="1" fill="#4c6ef5" opacity=".55"/>
+  <rect x="10" y="22" width="22" height="3" rx="1" fill="#8aa0d8" opacity=".65"/>
+  <rect x="10" y="28" width="28" height="3" rx="1" fill="#8aa0d8" opacity=".45"/>
+  <path d="M20 40h14l2 6H18z" fill="#2b3a55"/>
+  <rect x="14" y="46" width="26" height="3" rx="1.5" fill="#4c6ef5"/>
+
+  <!-- segundo monitor, indicando acesso a varias maquinas -->
+  <rect x="34" y="26" width="24" height="18" rx="2.5" fill="#0f1722"
+        stroke="#0ca678" stroke-width="2"/>
+  <rect x="38" y="30" width="16" height="2.5" rx="1" fill="#0ca678" opacity=".7"/>
+  <rect x="38" y="35" width="10" height="2.5" rx="1" fill="#3ddca0" opacity=".5"/>
+</svg>
