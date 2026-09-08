@@ -5075,11 +5075,18 @@ class Janela(Gtk.Window):
         falta o processo novo le-los. sys.executable, quando compilado, e
         o proprio Acessos.exe; rodando de fonte, e o interprete Python (e
         sys.argv[0] o acessos.py) — os dois casos precisam de tratamento
-        diferente pra reabrir corretamente."""
+        diferente pra reabrir corretamente.
+
+        sys.argv[1:] (ex.: --conf, --debug, --x11/--wayland) e repassado
+        nos dois casos — sem isso, reiniciar depois de uma atualizacao
+        derruba silenciosamente qualquer argumento com que o processo
+        original foi aberto (achado no teste de ponta a ponta de
+        2026-09-08; hoje inofensivo, os atalhos do instalador nunca
+        passam argumento nenhum, mas um --conf manual seria perdido)."""
         import subprocess
         try:
             if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable])
+                subprocess.Popen([sys.executable] + sys.argv[1:])
             else:
                 subprocess.Popen([sys.executable] + sys.argv)
         except Exception as e:
