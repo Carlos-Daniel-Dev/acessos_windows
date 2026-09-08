@@ -63,7 +63,20 @@ DEBUG = "--debug" in sys.argv
 def _bin_rdp_windows():
     """Acha o FreeRDP para Windows. Nome do binário varia por forma de
     instalação: build oficial gera 'wfreerdp.exe'; pacotes do MSYS2/vcpkg
-    às vezes só têm 'freerdp.exe'. Tenta os dois, nessa ordem."""
+    às vezes só têm 'freerdp.exe'. Tenta os dois, nessa ordem.
+
+    EMPACOTADO (PyInstaller): o compilar_exe.ps1 embute o wfreerdp.exe e
+    toda a cadeia de DLLs dele dentro do bundle (sys._MEIPASS), pra abrir
+    RDP sem exigir FreeRDP instalado à parte na máquina. Por isso a busca
+    olha lá PRIMEIRO — shutil.which() só acha o que está no PATH do
+    sistema, e o bundle não entra no PATH sozinho."""
+    if getattr(sys, "frozen", False):
+        aqui = getattr(sys, "_MEIPASS", None)
+        if aqui:
+            for nome in ("wfreerdp.exe", "freerdp.exe", "xfreerdp.exe"):
+                caminho = os.path.join(aqui, nome)
+                if os.path.isfile(caminho):
+                    return caminho, nome
     for nome in ("wfreerdp.exe", "freerdp.exe", "xfreerdp.exe"):
         caminho = shutil.which(nome)
         if caminho:

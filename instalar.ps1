@@ -506,6 +506,7 @@ function Instalar-Aplicacao {
     # massa.py / massa_ui.py: propositalmente NÃO portados (ver LEIAME)
 
     Copy-Item (Join-Path $Aqui "icones\acessos.svg") $Destino -Force -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $Aqui "icones\acessos.ico") $Destino -Force -ErrorAction SilentlyContinue
 
     # LANCADOR: junta o interpretador do MSYS2 (unico que enxerga GTK3 e
     # PyGObject) com os modulos do Acessos. Equivalente ao script em
@@ -532,9 +533,14 @@ set PATH=$Mingw64\bin;%PATH%
             $atalho = $wsh.CreateShortcut($MenuAtalho)
             $atalho.TargetPath = Join-Path $Destino "acessos.cmd"
             $atalho.WorkingDirectory = $Destino
-            # atalhos do Windows preferem .ico; sem um .ico dedicado, cai no
-            # ícone padrão do .cmd — converter o .svg é melhoria futura, não
-            # bloqueia o uso
+            $icone = Join-Path $Destino "acessos.ico"
+            if (Test-Path $icone) {
+                # ",0" seleciona o primeiro icone do arquivo — .ico so tem
+                # um, mas o formato IconLocation e sempre "caminho,indice"
+                $atalho.IconLocation = "$icone,0"
+            }
+            # sem acessos.ico (build antigo, ou gerar_ico.py nao rodou):
+            # cai no icone padrao do .cmd — nao bloqueia o uso
             $atalho.Save()
         } catch {
             Nota "não consegui criar o atalho ($($_.Exception.Message))"

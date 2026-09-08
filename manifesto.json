@@ -1,14 +1,14 @@
 ﻿{
-    "versao":  "2026.09.04.1312",
-    "gerado_em":  "2026-09-04T17:12:51Z",
+    "versao":  "2026.09.08.1406",
+    "gerado_em":  "2026-09-08T18:06:46Z",
     "copiar":  {
                    "python/acessos.py":  {
-                                             "sha256":  "99c639a975d65f8cec0a8e111b38036cc7db1fad1befb239e7e4d35445e4a6a0",
-                                             "bytes":  256153
+                                             "sha256":  "965a3716f7a5edac2340d0183031d5a26d2eae4e881d544656a0e13ed316e600",
+                                             "bytes":  259273
                                          },
                    "python/vncwidget.py":  {
-                                               "sha256":  "d1ef7e9df336fc2e70fba433cb27b072b47e73f9a955d7685853809ceb3d7973",
-                                               "bytes":  33803
+                                               "sha256":  "19f3ca19f3b2131f21b773d7c86db4bb2484d8f9aeeae2e591dfbb57c4e2de65",
+                                               "bytes":  34406
                                            },
                    "python/sftp.py":  {
                                           "sha256":  "9eda0418843e760bcf2a81187c6183ed39ee46fc34a3e7d4ee6b0c11ff2b4cf4",
@@ -23,8 +23,8 @@
                                           "bytes":  32191
                                       },
                    "python/rdp_windows.py":  {
-                                                 "sha256":  "a9880aeb79dbfce7da4a473087bf34384a9e4af40355b02d78564c13b83fe31a",
-                                                 "bytes":  14164
+                                                 "sha256":  "a4a2d53bcbf9b638acb6c8508e01de60c0486027958251c261f6e86282fc5367",
+                                                 "bytes":  14823
                                              },
                    "python/ssh_windows.py":  {
                                                  "sha256":  "5fd3e7a5cc1e8a2bc37ed81e05a9930fc584032f132c5207908127e93b392d36",
