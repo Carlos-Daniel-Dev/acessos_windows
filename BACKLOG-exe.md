@@ -578,8 +578,19 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
         testadas antes), forçando o checkout local pra LF e regerando o
         manifesto (`gerar_manifesto.ps1 -Versao 0.2.3`) — o hash resultante
         de `python/acessos.py` (`20c59b77...`, 266050 bytes) bateu
-        exatamente com o que o GitHub já servia. Release nova publicada pra
-        concluir o teste com o fix aplicado.
+        exatamente com o que o GitHub já servia. Release `v0.2.3` publicada
+        e o teste **repetido com sucesso**: checagem → aviso → confirmação
+        → download → hash confere → 5 arquivo(s) aplicado(s) → "reiniciar
+        agora" → o processo reaberto mostrou o título com **"atualizado ✓"**
+        — a prova de ponta a ponta de que o auto-atualizador troca o código
+        em disco e ele entra em vigor sem reinstalar o `.exe`.
+        Efeito colateral encontrado no próprio teste: `_reiniciar_app()`
+        (compilado) reabria com `subprocess.Popen([sys.executable])`, sem
+        argumento nenhum — descartando silenciosamente qualquer `--conf`/
+        `--debug`/`--x11`/`--wayland` com que o processo original tinha
+        sido aberto. Inofensivo hoje (os atalhos do `instalador.iss` nunca
+        passam argumento), mas corrigido mesmo assim: repassa
+        `sys.argv[1:]` nos dois ramos (compilado e rodando de fonte).
 
 ## Ordem sugerida de ataque
 
@@ -601,14 +612,14 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
    só as decisões adiadas de propósito (assinatura de código, argon2-cffi
    na máquina de build) e a nova frente de auto-atualização via GitHub
    (ver Item 5, estudo de 2026-09-08).
-5. Item 5 (auto-atualização via GitHub) — **essencialmente completo**.
-   ~~Pré-requisito arquitetural~~ ✅ (`launcher.py` + `Acessos.spec` — os
-   `.py` do projeto ficam soltos em `_internal\`, confirmado trocando um
-   arquivo sem recompilar). ~~Checagem~~ ✅ e ~~baixar/aplicar~~ ✅
-   construídos e testados em 2026-09-08 (`python/atualizador.py` completo
-   — checa, baixa, confere hash, aplica com backup; UI no rodapé com
-   confirmação antes de aplicar e antes de reiniciar). `DONO_REPO`/
-   `NOME_REPO` já preenchidos (`Carlos-Daniel-Dev/acessos_windows`) — só
-   falta o repositório virar público nas configurações do GitHub (está
-   privado hoje) e existir uma Release publicada pra testar contra a API
-   de verdade (testado até aqui com rede simulada).
+5. ~~Item 5~~ ✅ (auto-atualização via GitHub) — **completo e confirmado
+   de ponta a ponta em 2026-09-08**. `launcher.py` + `Acessos.spec` (os
+   `.py` do projeto ficam soltos em `_internal\`); `python/atualizador.py`
+   completo (checa, baixa, confere hash, aplica com backup; UI no rodapé
+   com confirmação antes de aplicar e antes de reiniciar); repositório
+   público, Release `v0.2.3` publicada. Teste real: rodando um build
+   antigo (v0.2.1) de verdade, clicando nos botões via automação de mouse
+   — checagem, download, hash e aplicação bateram certo, e depois de
+   reiniciar o título mostrou "atualizado ✓". No caminho, um bug real de
+   CRLF vs LF no hash do manifesto foi encontrado e corrigido (PR #4,
+   `.gitattributes`) — ver o relato completo acima, nesta mesma seção.
