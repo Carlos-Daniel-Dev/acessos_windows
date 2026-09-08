@@ -699,10 +699,16 @@ def identificar_aplicacao():
 
 
 
-def segmentado(opcoes, ativo, ao_mudar):
+def segmentado(opcoes, ativo, ao_mudar, prefixo_classe="seg"):
     """Grupo de ToggleButton com aparencia de segmented control.
     ToggleButton e nao RadioButton: o grupo de radio nasce com um item
-    marcado e engole o primeiro clique."""
+    marcado e engole o primeiro clique.
+
+    `prefixo_classe`: troca a familia de classes CSS ("seg"/"seg-ini"/
+    "seg-fim"/"seg-meio" por padrao) por outra — existe pra um segmentado
+    poder viver fora de uma area de conteudo (cartao claro) sem ficar com
+    a paleta errada; ver ".seg-topo*" em tema.py, usado pelo seletor de
+    tema, que mora na barra de titulo (vidro escuro)."""
     caixa = Gtk.Box(spacing=0)
     botoes = {}
     estado = {"trocando": False}
@@ -725,13 +731,13 @@ def segmentado(opcoes, ativo, ao_mudar):
     ultimo = len(opcoes) - 1
     for i, (chave, texto) in enumerate(opcoes):
         bt = Gtk.ToggleButton(label=texto)
-        add_class(bt, "seg")
+        add_class(bt, prefixo_classe)
         if i == 0:
-            add_class(bt, "seg-ini")
+            add_class(bt, prefixo_classe + "-ini")
         elif i == ultimo:
-            add_class(bt, "seg-fim")
+            add_class(bt, prefixo_classe + "-fim")
         else:
-            add_class(bt, "seg-meio")
+            add_class(bt, prefixo_classe + "-meio")
         bt.set_active(chave == ativo)
         bt.connect("toggled", clicou, chave)
         botoes[chave] = bt
@@ -3918,13 +3924,16 @@ class Janela(Gtk.Window):
         self.bt_log.connect("toggled", self._alternar_log)
         acoes.pack_start(self.bt_log, False, False, 0)
 
-        self.bt_tema = Gtk.ToggleButton(
-            label="☾" if self.tema == "claro" else "☀")
-        add_class(self.bt_tema, "btn-topo")
-        self.bt_tema.set_active(self.tema == "escuro")
-        self.bt_tema.set_tooltip_text("Alternar tema claro/escuro")
-        self.bt_tema.connect("toggled", self._alternar_tema)
-        acoes.pack_start(self.bt_tema, False, False, 0)
+        # seletor de tema: ANTES era um unico ToggleButton (liga/desliga
+        # escuro); virou um segmentado() de verdade, com os dois nomes a
+        # vista, em vez de um icone so que precisa ser lido pra saber que
+        # estado ta ativo agora. Reaproveita o mesmo helper que ja existe
+        # pra outros seletores no app (ver segmentado(), so nao era usado
+        # aqui ainda).
+        caixa_tema, self.botoes_tema = segmentado(
+            [("claro", "☾ Claro"), ("escuro", "☀ Escuro")],
+            self.tema, self._selecionar_tema, prefixo_classe="seg-topo")
+        acoes.pack_start(caixa_tema, False, False, 0)
 
         self.bt_fonte = Gtk.ToggleButton(label="A+")
         add_class(self.bt_fonte, "btn-topo")
@@ -4041,9 +4050,11 @@ class Janela(Gtk.Window):
             return True
         return False
 
-    def _alternar_tema(self, bt):
-        self.tema = "escuro" if bt.get_active() else "claro"
-        bt.set_label("☀" if self.tema == "escuro" else "☾")
+    def _selecionar_tema(self, tema):
+        """Callback do segmentado() do rodapé/titulo — `tema` já vem como
+        a chave escolhida ("claro"/"escuro"), não um widget; o próprio
+        segmentado() já cuida de manter só um botão marcado."""
+        self.tema = tema
         self._aplicar_css()
         self.gravar(SECAO_GERAL, "tema", self.tema)
         self._encher_home()
@@ -4959,8 +4970,15 @@ class Janela(Gtk.Window):
         cx = Gtk.Box(spacing=8)
         cx.set_border_width(5)
         cx.pack_start(rotulo(self.caminho, "rodape-info"), True, True, 0)
-        # escondido por padrao: so aparece se _ao_verificar_atualizacao()
-        # encontrar uma versao mais nova (ver _iniciar_checagem_atualizacao)
+        # os dois escondidos por padrao: so aparecem se
+        # _ao_verificar_atualizacao() encontrar uma versao mais nova (ver
+        # _iniciar_checagem_atualizacao)
+        self.bt_aplicar_atualizacao = add_class(
+            Gtk.Button(label="Atualizar agora"), "secundaria")
+        self.bt_aplicar_atualizacao.set_no_show_all(True)
+        self.bt_aplicar_atualizacao.set_visible(False)
+        self.bt_aplicar_atualizacao.connect("clicked", self._aplicar_atualizacao)
+        cx.pack_end(self.bt_aplicar_atualizacao, False, False, 0)
         self.chip_atualizacao = chip("", "atencao")
         self.chip_atualizacao.set_no_show_all(True)
         self.chip_atualizacao.set_visible(False)
@@ -4983,18 +5001,91 @@ class Janela(Gtk.Window):
             pass  # checagem de atualizacao e sempre best-effort
 
     def _ao_verificar_atualizacao(self, tem_atualizacao, versao_local,
-                                  versao_nova):
+                                  versao_nova, manifesto_remoto, tag):
         """Callback de volta na THREAD PRINCIPAL (via GLib.idle_add, ja
         garantido por atualizador.verificar_async) — so aqui e seguro
-        mexer no chip."""
+        mexer no chip/botao. Guarda manifesto_remoto/tag pra
+        _aplicar_atualizacao() nao precisar buscar tudo de novo."""
         if tem_atualizacao:
+            self._manifesto_atualizacao = manifesto_remoto
+            self._tag_atualizacao = tag
             self.chip_atualizacao.set_text(
                 "atualização disponível: %s" % versao_nova)
             self.chip_atualizacao.set_tooltip_text(
                 "versão instalada: %s\nversão nova: %s" %
                 (versao_local, versao_nova))
             self.chip_atualizacao.set_visible(True)
+            self.bt_aplicar_atualizacao.set_visible(True)
         return False  # GLib.idle_add: nao repetir
+
+    def _aplicar_atualizacao(self, _btn=None):
+        """Pede confirmacao, depois baixa e aplica os arquivos mudados em
+        background (ver atualizador.aplicar_async) — nunca sozinho, sem o
+        operador confirmar primeiro (decisao de 2026-09-08)."""
+        manifesto = getattr(self, "_manifesto_atualizacao", None)
+        tag = getattr(self, "_tag_atualizacao", None)
+        if not manifesto or not tag:
+            return
+        if not self.confirmar(
+                "Atualizar o Acessos",
+                "Baixar e aplicar a atualização agora? O Acessos precisa "
+                "ser reiniciado depois pra usar a versão nova — a sessão "
+                "atual continua com o código de agora até lá.",
+                ok="Atualizar"):
+            return
+        self.bt_aplicar_atualizacao.set_sensitive(False)
+        self.chip_atualizacao.set_text("baixando atualização…")
+        try:
+            _atualizador.aplicar_async(manifesto, tag,
+                                       self._ao_aplicar_atualizacao)
+        except Exception as e:
+            self.bt_aplicar_atualizacao.set_sensitive(True)
+            self.avisar("Falha ao atualizar", "Não consegui iniciar o "
+                       "download: %s" % e)
+
+    def _ao_aplicar_atualizacao(self, resultado):
+        """Callback de volta na THREAD PRINCIPAL (via GLib.idle_add, ja
+        garantido por atualizador.aplicar_async)."""
+        self.bt_aplicar_atualizacao.set_sensitive(True)
+        aplicados = resultado.get("aplicados", [])
+        falhas = resultado.get("falhas", [])
+        if falhas:
+            detalhe = "\n".join("%s: %s" % (n, m) for n, m in falhas)
+            self.avisar(
+                "Atualização parcial" if aplicados else "Falha ao atualizar",
+                "%d arquivo(s) aplicado(s), %d falharam:\n\n%s"
+                % (len(aplicados), len(falhas), detalhe))
+        if aplicados:
+            self.chip_atualizacao.set_text(
+                "atualização aplicada — reinicie pra usar")
+            if self.confirmar(
+                    "Reiniciar o Acessos",
+                    "%d arquivo(s) atualizado(s). Reiniciar agora pra "
+                    "usar a versão nova?" % len(aplicados),
+                    ok="Reiniciar agora"):
+                self._reiniciar_app()
+        elif not falhas:
+            self.chip_atualizacao.set_text("nada pra aplicar (já atualizado)")
+        return False  # GLib.idle_add: nao repetir
+
+    def _reiniciar_app(self):
+        """Abre uma nova instancia do proprio executavel e fecha esta —
+        os arquivos ja foram trocados em disco (_aplicar_atualizacao), so
+        falta o processo novo le-los. sys.executable, quando compilado, e
+        o proprio Acessos.exe; rodando de fonte, e o interprete Python (e
+        sys.argv[0] o acessos.py) — os dois casos precisam de tratamento
+        diferente pra reabrir corretamente."""
+        import subprocess
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable])
+            else:
+                subprocess.Popen([sys.executable] + sys.argv)
+        except Exception as e:
+            self.avisar("Não consegui reiniciar",
+                       "Fecha e abre o Acessos manualmente: %s" % e)
+            return
+        self.close()
 
     # -------------------------------------------------- lista
     def _popular(self):

@@ -40,8 +40,14 @@ $ArquivosCopiar = @(
     "python\win_embed.py",
     "python\conpty.py",
     "python\bandeja_windows.py",
+    "python\atualizador.py",
     "icones\acessos.svg"
 )
+# python\launcher.py PROPOSITALMENTE fora desta lista: e o unico modulo
+# que fica compilado dentro do .exe pra sempre (ver Acessos.spec) — nao
+# ha como o auto-atualizador hot-patchar o proprio bootstrap que o
+# carrega, entao rastrea-lo aqui so criaria uma entrada que nunca poderia
+# ser aplicada de verdade pelo atualizador.py
 
 # arquivos que precisam de um passo extra (compilação) em vez de so copiar
 $ArquivosCompilar = @(

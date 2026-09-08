@@ -471,9 +471,63 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
         `_ao_verificar_atualizacao()` receber `tem_atualizacao=True`.
         Disparado uma vez, no fim de `Janela.__init__`
         (`_iniciar_checagem_atualizacao()`).
-      - **Baixar e aplicar os arquivos mudados — AINDA NÃO CONSTRUÍDO**:
-        fica pra próxima etapa, depois de confirmação do operador (chip
-        clicável, ou um diálogo).
+      - **Baixar e aplicar os arquivos mudados — CONSTRUÍDO E TESTADO em
+        2026-09-08.** `atualizador.listar_diferencas(manifesto_remoto)`
+        compara, POR HASH (não por nome/data), cada entrada da seção
+        "copiar" do manifesto remoto contra o arquivo solto já instalado
+        no bundle (`sys._MEIPASS`) — PROPOSITALMENTE não olha a seção
+        "compilar" (`vncshim.dll`): esse arquivo não pode ser regerado
+        sem um compilador C, uma mudança nele continua exigindo
+        reinstalar via `.exe` novo. `atualizador.aplicar_atualizacao(...)`
+        baixa cada arquivo diferente de `raw.githubusercontent.com`,
+        **confere o SHA-256 do que baixou contra o que o manifesto
+        prometia ANTES de sobrescrever** (uma resposta truncada/corrompida
+        na rede não pode virar um arquivo quebrado no bundle), faz backup
+        do arquivo antigo (`.backup_atualizacao\`, um nível só, mesma
+        filosofia do `.backup_anterior` que `atualizar.ps1` já usa) e só
+        então grava o novo. `aplicar_async()` roda tudo numa thread (é
+        rede — mesmo cuidado de `verificar_async()`).
+        - **UI**: botão "Atualizar agora" no rodapé, ao lado do chip
+          (aparecem juntos). Clicar pede confirmação
+          (`Janela.confirmar()`, já existente), aplica em background, e
+          ao terminar oferece "Reiniciar agora" (`Janela.confirmar()` de
+          novo) — que abre uma nova instância do `.exe` via
+          `subprocess.Popen([sys.executable])` e fecha a atual. Falhas
+          parciais são relatadas por arquivo (`Janela.avisar()`), sem
+          travar os que deram certo.
+        - **Testado com rede simulada** (o repositório real ainda está
+          privado, sem release publicada pra testar contra o GitHub de
+          verdade): script que monkeypatcha `_baixar_bytes()` pra devolver
+          conteúdo fake com hash correspondente, aplicado contra um bundle
+          `.exe` compilado de verdade. Confirmou: (1) arquivos IDÊNTICOS
+          ao manifesto não aparecem como diferença; (2) um arquivo com
+          hash diferente é corretamente detectado, baixado (simulado) e
+          sobrescrito, com backup do original confirmado em disco; (3)
+          **downloads com hash que NÃO bate são corretamente REJEITADOS**
+          — a checagem de integridade funciona de verdade, não só na
+          teoria.
+        - **Achado colateral, não um bug**: o mesmo teste revelou que
+          `manifesto.json` estava desatualizado (3 arquivos com hash
+          diferente do que o manifesto registrava) — não é falha da
+          lógica de comparação, é só o manifesto não ter sido regerado
+          depois de edições recentes. `gerar_manifesto.ps1` corrigido
+          pra incluir `atualizador.py` na lista rastreada (estava
+          faltando desde que o arquivo foi criado) e o manifesto foi
+          regerado.
+        - **Achado real sobre o próprio teste manual**: descobri que
+          `MainWindowTitle='Acessos'` sozinho NÃO confirma que a janela
+          principal abriu — o diálogo de senha do cofre (`cofre.py`,
+          `_dialogo("Acessos", pai)`) usa o MESMO título. Testes
+          anteriores desta sessão que só checavam o título podem ter
+          confirmado apenas "chegou no diálogo do cofre", não "a janela
+          principal (com o rodapé novo) construiu sem erro". Corrigido
+          testando também o TAMANHO da janela (`GetWindowRect` via
+          ctypes/P-Invoke do PowerShell) — a principal é maximizada
+          (~1920x1040 nesta máquina), o diálogo é pequeno. Testado de
+          verdade com uma config `--conf` descartável, sem cofre (pra não
+          mexer no cofre real desta máquina) — confirmado: janela
+          principal maximizada, rodapé com o chip/botão novos construído
+          sem erro, `log.txt` limpo.
       - **Dois bugs reais encontrados e corrigidos durante o teste**:
         (1) `atualizador.py` não estava em `MODULOS_PROJETO` no
         `Acessos.spec` nem importado em lugar nenhum — a primeira
@@ -525,12 +579,14 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
    só as decisões adiadas de propósito (assinatura de código, argon2-cffi
    na máquina de build) e a nova frente de auto-atualização via GitHub
    (ver Item 5, estudo de 2026-09-08).
-5. Item 5 (auto-atualização via GitHub) — o que resta do backlog.
-   ~~Pré-requisito arquitetural~~ ✅ construído e provado em 2026-09-08
-   (`launcher.py` + `Acessos.spec` — os `.py` do projeto agora ficam
-   soltos em `_internal\`, confirmado trocando um arquivo sem recompilar).
-   ~~Checagem em si~~ ✅ construída e testada em 2026-09-08
-   (`python/atualizador.py` + chip no rodapé) — falta só preencher
-   `DONO_REPO`/`NOME_REPO` quando o repositório existir, e construir a
-   parte de baixar e aplicar os arquivos mudados (com confirmação do
-   operador, já decidido).
+5. Item 5 (auto-atualização via GitHub) — **essencialmente completo**.
+   ~~Pré-requisito arquitetural~~ ✅ (`launcher.py` + `Acessos.spec` — os
+   `.py` do projeto ficam soltos em `_internal\`, confirmado trocando um
+   arquivo sem recompilar). ~~Checagem~~ ✅ e ~~baixar/aplicar~~ ✅
+   construídos e testados em 2026-09-08 (`python/atualizador.py` completo
+   — checa, baixa, confere hash, aplica com backup; UI no rodapé com
+   confirmação antes de aplicar e antes de reiniciar). `DONO_REPO`/
+   `NOME_REPO` já preenchidos (`Carlos-Daniel-Dev/acessos_windows`) — só
+   falta o repositório virar público nas configurações do GitHub (está
+   privado hoje) e existir uma Release publicada pra testar contra a API
+   de verdade (testado até aqui com rede simulada).

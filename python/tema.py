@@ -449,6 +449,25 @@ button.default, button.default label,
 .seg-fim { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
 .seg-meio { border-left-width: 0px; border-right-width: 0px; }
 
+/* mesma ideia do .seg, mas com a paleta do .btn-topo — pra um segmentado()
+   viver dentro da barra de titulo (vidro escuro), nao numa area de
+   conteudo (cartao claro). Usado pelo seletor de tema, que mora ali. */
+.seg-topo {
+    background-image: none; background-color: %(vidro)s;
+    color: %(topo_sec)s; border: 1px solid %(vidro_b)s;
+    border-radius: 0px; padding: 2px 8px; min-height: 0px; min-width: 0px;
+    box-shadow: none; text-shadow: none;
+    font-family: """ + MONO + """; font-size: 10px; font-weight: 600;
+    transition: background-color 140ms ease, color 140ms ease;
+}
+.seg-topo:hover { background-color: %(vidro_h)s; color: %(topo_txt)s; }
+.seg-topo:checked, .seg-topo:checked:hover {
+    background-color: %(vidro_h)s; color: %(topo_txt)s; border-color: %(topo_txt)s;
+}
+.seg-topo-ini { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.seg-topo-fim { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+.seg-topo-meio { border-left-width: 0px; border-right-width: 0px; }
+
 /* ---------------- areas ---------------- */
 .palco { background-color: %(palco)s; }
 .log, .log text {
