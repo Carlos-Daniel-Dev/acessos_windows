@@ -54,8 +54,19 @@ _CARREGADOR = ctypes.WinDLL if sys.platform == "win32" else ctypes.CDLL
 
 
 def _carregar_shim():
-    """Acha o shim ao lado deste arquivo, ou no caminho do sistema."""
+    """Acha o shim ao lado deste arquivo, ou no caminho do sistema.
+
+    EMPACOTADO (PyInstaller): __file__ nao aponta para um diretorio de
+    verdade — este modulo vem de dentro do bundle (PYZ), entao
+    os.path.dirname(__file__) resolve para um caminho sintetico que nao
+    existe no disco. sys._MEIPASS e onde os arquivos adicionados via
+    --add-binary/--add-data realmente estao: a pasta extraida (--onefile,
+    um temp por execucao) ou a pasta ao lado do .exe (--onedir, hoje
+    chamada _internal). Ver compilar_exe.ps1 para onde o libvncshim.dll
+    e colocado no bundle."""
     aqui = os.path.dirname(os.path.abspath(__file__))
+    if getattr(sys, "frozen", False):
+        aqui = getattr(sys, "_MEIPASS", aqui)
     for caminho in (os.path.join(aqui, _NOME_SHIM), _NOME_SHIM):
         try:
             return _CARREGADOR(caminho)

@@ -138,6 +138,15 @@ except Exception as e:
 # instancia unica da sessao: preenchida no arranque, usada ao ler e gravar
 COFRE = None
 
+# Checagem de atualizacao via GitHub: modulo separado, so verifica e avisa
+# (ver atualizador.py). Ausente ou falhando, o app segue igual — nunca e
+# motivo pra travar ou atrasar o arranque.
+try:
+    import atualizador as _atualizador
+    TEM_ATUALIZADOR = True
+except Exception:
+    _atualizador, TEM_ATUALIZADOR = None, False
+
 # Transferencia de arquivos: modulo separado de proposito, para poder mexer
 # nela sem tocar no resto. Ausente, o botao apenas avisa.
 try:
@@ -617,7 +626,10 @@ def caminho_icone():
     """Acha o SVG do programa, na ordem em que ele pode existir.
 
     Dentro de um AppImage o conteudo e montado num diretorio temporario e o
-    caminho muda a cada execucao — por isso $APPDIR vem primeiro."""
+    caminho muda a cada execucao — por isso $APPDIR vem primeiro. Mesma
+    ideia para um build PyInstaller: __file__ nao aponta para um diretorio
+    real (o modulo vem de dentro do bundle), sys._MEIPASS e quem sabe onde
+    o icones/acessos.svg foi colocado (--add-data, ver compilar_exe.ps1)."""
     nomes = ("acessos.svg", "acessos.png")
     bases = []
     appdir = os.environ.get("APPDIR")
@@ -626,6 +638,8 @@ def caminho_icone():
                                "scalable", "apps"),
                   appdir]
     aqui = os.path.dirname(os.path.abspath(__file__))
+    if getattr(sys, "frozen", False):
+        aqui = getattr(sys, "_MEIPASS", aqui)
     bases += [
         aqui,
         os.path.join(aqui, "..", "..", "share", "icons", "hicolor",
@@ -3746,6 +3760,7 @@ class Janela(Gtk.Window):
         self.connect("destroy", self._sair)
         self._aplicar_css()
         self._montar()
+        self._iniciar_checagem_atualizacao()
 
     def cor(self, chave):
         return TEMAS[self.tema][chave]
@@ -4944,10 +4959,42 @@ class Janela(Gtk.Window):
         cx = Gtk.Box(spacing=8)
         cx.set_border_width(5)
         cx.pack_start(rotulo(self.caminho, "rodape-info"), True, True, 0)
+        # escondido por padrao: so aparece se _ao_verificar_atualizacao()
+        # encontrar uma versao mais nova (ver _iniciar_checagem_atualizacao)
+        self.chip_atualizacao = chip("", "atencao")
+        self.chip_atualizacao.set_no_show_all(True)
+        self.chip_atualizacao.set_visible(False)
+        cx.pack_end(self.chip_atualizacao, False, False, 0)
         self.lb_conta = rotulo("%d máquinas" % len(self.conexoes),
                                "rodape-info", xalign=1.0)
         cx.pack_end(self.lb_conta, False, False, 0)
         return cx
+
+    def _iniciar_checagem_atualizacao(self):
+        """Dispara a checagem de atualizacao em background (ver
+        atualizador.py) — nunca bloqueia o arranque, e sem repositorio
+        configurado ainda (TODO em atualizador.py) simplesmente nao avisa
+        nada, silenciosamente."""
+        if not TEM_ATUALIZADOR:
+            return
+        try:
+            _atualizador.verificar_async(self._ao_verificar_atualizacao)
+        except Exception:
+            pass  # checagem de atualizacao e sempre best-effort
+
+    def _ao_verificar_atualizacao(self, tem_atualizacao, versao_local,
+                                  versao_nova):
+        """Callback de volta na THREAD PRINCIPAL (via GLib.idle_add, ja
+        garantido por atualizador.verificar_async) — so aqui e seguro
+        mexer no chip."""
+        if tem_atualizacao:
+            self.chip_atualizacao.set_text(
+                "atualização disponível: %s" % versao_nova)
+            self.chip_atualizacao.set_tooltip_text(
+                "versão instalada: %s\nversão nova: %s" %
+                (versao_local, versao_nova))
+            self.chip_atualizacao.set_visible(True)
+        return False  # GLib.idle_add: nao repetir
 
     # -------------------------------------------------- lista
     def _popular(self):
@@ -5928,7 +5975,70 @@ class Janela(Gtk.Window):
 
 # ---------------------------------------------------------------- main
 
+def _preparar_saida_sem_console():
+    """Redireciona stdout/stderr para um arquivo quando não há console.
+
+    Compilado com PyInstaller em modo janela (`--windowed`) — ou rodando
+    via `pythonw.exe` — o processo nunca tem um console anexado. Sem isto,
+    qualquer print()/sys.stderr.write() daqui pra baixo (tem MUITOS,
+    incluindo diagnóstico de erro do cofre e do carregamento do .ini) some
+    sem deixar rastro: a app fecha (ou trava) sem dar nenhuma pista do
+    porquê, e não há terminal nenhum para olhar.
+
+    TESTADO NA PRATICA E CORRIGIDO: a primeira versão disto checava
+    "sys.stdout is None" — verdade para pythonw.exe, mas o bootloader
+    `runw.exe` do PyInstaller (usado pelo `--windowed`) NÃO deixa
+    sys.stdout None; ele entrega um objeto que aceita write() e descarta
+    tudo em silêncio. Checar só "is None" nunca disparava neste caso, e o
+    log.txt simplesmente não era criado. GetConsoleWindow() (a mesma
+    checagem que bandeja_windows.py já usa) é o teste que funciona nos
+    dois casos: sem console de verdade anexado, o HWND vem 0/nulo."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        sem_console = not ctypes.windll.kernel32.GetConsoleWindow()
+    except Exception:
+        sem_console = sys.stdout is None or sys.stderr is None
+    if not sem_console:
+        return
+    try:
+        pasta = os.path.join(
+            os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
+            "acessos")
+        os.makedirs(pasta, exist_ok=True)
+        caminho_log = os.path.join(pasta, "log.txt")
+        # so guarda a rodada ANTERIOR — nao e historico, e o suficiente
+        # para diagnosticar "travou/fechou sozinho" sem crescer sem fim
+        if os.path.exists(caminho_log):
+            anterior = os.path.join(pasta, "log.anterior.txt")
+            try:
+                if os.path.exists(anterior):
+                    os.remove(anterior)
+                os.replace(caminho_log, anterior)
+            except OSError:
+                pass
+        arquivo = open(caminho_log, "w", encoding="utf-8", buffering=1)
+        sys.stdout = arquivo
+        sys.stderr = arquivo
+    except Exception:
+        pass
+    # o que vier depois disto (argparse, exceções não tratadas etc.) pode
+    # ainda tentar escrever num sys.stdout/stderr None se o open() acima
+    # falhou (ex.: %LOCALAPPDATA% ausente) — melhor um sumidouro mudo do
+    # que a exceção "NoneType has no attribute write" mascarar o erro real
+    class _Sumidouro:
+        def write(self, *_a, **_k): pass
+        def flush(self): pass
+        def isatty(self): return False
+    if sys.stdout is None:
+        sys.stdout = _Sumidouro()
+    if sys.stderr is None:
+        sys.stderr = _Sumidouro()
+
+
 def main():
+    _preparar_saida_sem_console()
     import atexit
     # MEDIDOR DE RESPONSIVIDADE (ACESSOS_PULSO=1).
     #

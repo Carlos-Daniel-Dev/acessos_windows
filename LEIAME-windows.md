@@ -13,6 +13,14 @@ copiados aqui, os inalterados junto dos novos/patchados.
 | `gerar_manifesto.ps1` | **novo** — ferramenta de release: gera `manifesto.json` |
 | `manifesto.json` | **novo** — hashes SHA-256 dos arquivos rastreados, para o patcher |
 | `atualizar.ps1` | **novo** — aplica atualizações incrementais, sem reinstalar tudo |
+| `compilar_exe.ps1` | **novo** — empacota `acessos.py` num `.exe` standalone (PyInstaller/MSYS2) |
+| `instalador.iss` | **novo** — instalador único (Inno Setup): extrai o `.exe` pronto, cria atalhos no Menu Iniciar e na Área de Trabalho |
+| `publicar.ps1` | **novo** — encadeia manifesto + `compilar_exe.ps1` + `instalador.iss` num comando só |
+| `resolver_dlls.sh` | **novo** — resolve o fechamento de dependências nativas do FreeRDP (usado por `compilar_exe.ps1`) |
+| `python/launcher.py` | **novo** — ponto de entrada do `.exe` compilado; único módulo que fica compilado dentro dele (ver `Acessos.spec`) |
+| `Acessos.spec` | **novo** — spec do PyInstaller mantido à mão: tira os `.py` do projeto do `PYZ`, deixa soltos em `_internal\` |
+| `python/atualizador.py` | **novo** — verifica se há versão nova no GitHub e avisa (não baixa/aplica sozinho) |
+| `gerar_ico.py` | **novo** — gera `icones/acessos.ico` a partir do `.svg` (ferramenta de release) |
 | `python/win_embed.py` | **novo** — reparenta HWND externa (`SetParent`), em **ctypes puro** (sem pywin32) |
 | `python/conpty.py` | **novo** — ConPTY (`CreatePseudoConsole`) em **ctypes puro** (sem pywinpty) |
 | `python/bandeja_windows.py` | **novo** — esconde o console do lançador depois do login e o representa por um ícone de bandeja (`Shell_NotifyIcon`), **ctypes puro** |
@@ -23,6 +31,7 @@ copiados aqui, os inalterados junto dos novos/patchados.
 | `python/sftp.py`, `cofre.py`, `tema.py` | **inalterados** — já são portáveis (paramiko/cryptography puros) |
 | `src/vncshim.c` | **inalterado** — compilado para `.dll` pelo `instalar.ps1`, mesmo código C |
 | `icones/acessos.svg` | inalterado |
+| `icones/acessos.ico` | **novo** — gerado por `gerar_ico.py`, usado como ícone do `.exe` e do atalho |
 
 `massa.py`/`massa_ui.py` **não foram portados**, por instrução explícita do
 LEIAME original.
@@ -128,9 +137,81 @@ para o patch mais recente.
 
 ## Compilar tudo num `.exe`
 
-Levantado, ainda não implementado — ver [BACKLOG-exe.md](BACKLOG-exe.md)
-para o roteiro completo (instalador único + `Acessos.exe` sem depender do
-MSYS2 exposto, ícone próprio, etc.).
+Em andamento — ver [BACKLOG-exe.md](BACKLOG-exe.md) para o roteiro
+completo. **Primeira build real já funciona** (2026-09-04):
+`.\compilar_exe.ps1` empacota `python\acessos.py` inteiro (via PyInstaller
+do MSYS2 — `mingw-w64-x86_64-pyinstaller`, ABI já compatível, sem conflito)
+num `Acessos.exe` standalone (`dist_exe\Acessos\`), testado rodando SEM o
+MSYS2 no PATH.
+
+Flags: `-Console` (mantém console visível, mais fácil de depurar um build
+novo) e `-PularVncshim` (reaproveita um `libvncshim.dll` já compilado, pra
+iterar mais rápido quando só o `.py` mudou).
+
+Por padrão o build sai **sem console** (`--windowed`) — nesse modo,
+`sys.stdout`/`sys.stderr` são redirecionados para
+`%LOCALAPPDATA%\acessos\log.txt` (`_preparar_saida_sem_console()` em
+`acessos.py`; mantém só a rodada anterior como `log.anterior.txt`). Sem
+console, `bandeja_windows.py` não tem o que esconder e não faz nada — ele
+continua útil só para quem roda via `acessos.cmd`/MSYS2 direto.
+
+**Testado pela equipe com conexões de verdade**: VNC, SSH e RDP conectam
+normalmente a partir do `.exe` compilado. O RDP inicialmente não conectou
+(a máquina de teste não tinha `wfreerdp.exe` instalado — ele é achado via
+PATH, uma ferramenta externa) — resolvido embutindo o FreeRDP inteiro
+(binário + as 91 DLLs das quais ele depende, incluindo toda a pilha de
+codecs de vídeo) dentro do bundle via `resolver_dlls.sh`. Isso engorda o
+`.exe` de ~122 MB para ~206 MB; quem preferir o bundle menor com FreeRDP
+instalado à parte (mesma exigência de sempre) usa
+`.\compilar_exe.ps1 -SemRdp`.
+
+**Instalador único, testado de ponta a ponta** (2026-09-08):
+`instalador.iss` (Inno Setup — precisa dele instalado; `winget install
+JRSoftware.InnoSetup` funciona sem admin) empacota a pasta `dist_exe\
+Acessos\` já pronta. Compilar:
+
+    & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" `
+        /DAppVersion=2026.09.08.1 instalador.iss
+
+Gera `AcessosSetup-<versão>.exe` (~58 MB, comprimido) em
+`dist_instalador\`. Instala em `%LOCALAPPDATA%\Acessos` sem pedir admin,
+cria atalho no Menu Iniciar **e** na Área de Trabalho (desmarcável na tela
+do instalador), e o desinstalador remove tudo de volta — inclusive
+`log.txt`/`log.anterior.txt` que o app escreve em tempo de execução —
+preservando a configuração do usuário (`~/.config/acessos`, fora da pasta
+de instalação de propósito). Testado o ciclo completo: instalar → abrir
+pelo atalho (com PATH mínimo, sem MSYS2) → desinstalar → conferir que a
+config sobreviveu.
+
+**Publicar tudo num comando só**: `.\publicar.ps1` encadeia
+`gerar_manifesto.ps1` + `compilar_exe.ps1` + `ISCC.exe` + limpeza dos
+artefatos de build, e opcionalmente copia o instalador pronto pro ponto de
+distribuição (`-DestinoPublicacao <caminho>`). Testado de ponta a ponta —
+o instalador resultante passa pelo mesmo ciclo (instalar → rodar →
+desinstalar → config preservada) que o teste manual já validou.
+
+**Arquitetura do bundle mudou (2026-09-08)**: os módulos do próprio
+projeto (`acessos.py`, `tema.py`, `cofre.py`...) não ficam mais
+compactados dentro do `PYZ` do PyInstaller — ficam soltos em `_internal\`,
+igual às DLLs de terceiros já ficavam. `compilar_exe.ps1` agora chama
+`pyinstaller Acessos.spec` (mantido à mão) em vez de passar uma lista de
+`--flags`, e o ponto de entrada real do `.exe` virou `python/launcher.py`
+(minúsculo, só ajusta o `sys.path` e importa `acessos`) — é o único módulo
+que continua compilado dentro do binário. **Provado, não só implementado**:
+com o `.exe` já compilado, editei um `.py`, copiei o arquivo modificado
+direto por cima do `_internal\` do bundle (sem rodar `compilar_exe.ps1`/
+PyInstaller de novo) e a mudança apareceu no `log.txt` na próxima abertura.
+Isso é o pré-requisito pra uma futura auto-atualização via GitHub (ver
+Item 5 do backlog) só sobrescrever o `.py` que mudou, sem reinstalar tudo.
+
+**Checagem de atualização via GitHub, construída** (2026-09-08):
+`python/atualizador.py` compara a versão local (lida do `manifesto.json`
+embutido no bundle) contra a última GitHub Release do repositório —
+público, sem autenticação nenhuma. Só avisa (um chip no rodapé da janela
+principal); não baixa nem aplica nada sozinho. **Repositório ainda não
+existe** — preencher `DONO_REPO`/`NOME_REPO` no topo do arquivo quando ele
+for criado; até lá, a checagem simplesmente não encontra nada e não avisa
+nada, sem quebrar o app.
 
 ## Ordem sugerida pra testar
 

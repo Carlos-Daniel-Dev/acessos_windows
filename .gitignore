@@ -1,0 +1,15 @@
+# Artefatos de build — regeneráveis via compilar_exe.ps1/publicar.ps1,
+# nunca devem ir pro repositório (chegam a ~200 MB e mudam a cada build).
+dist_exe/
+build_exe/
+dist_instalador/
+
+# bytecode do Python
+__pycache__/
+*.pyc
+
+# Diagnóstico local de teste manual (ver instalador.iss/atualizar.ps1) —
+# nunca gerado dentro desta pasta em uso normal, só aparece durante testes
+# manuais de instalação feitos aqui.
+.estado_patch.json
+.backup_anterior/
