@@ -1,0 +1,23 @@
+# Força LF nos arquivos que o auto-atualizador rastreia por hash — não
+# depende do core.autocrlf de quem clona/edita no Windows.
+#
+# POR QUÊ ISSO EXISTE (2026-09-08, ver BACKLOG-exe.md, Item 5): o
+# auto-atualizador (python/atualizador.py) verifica cada arquivo baixado
+# pelo SHA-256 gravado em manifesto.json ANTES de sobrescrever o que já
+# está instalado. Sem este arquivo, um checkout no Windows com
+# core.autocrlf=true grava os .py locais com CRLF, mas o GitHub sempre
+# serve (via raw.githubusercontent.com e a API de conteúdo) o blob como
+# foi commitado — normalizado para LF por padrão. gerar_manifesto.ps1
+# calcula o hash a partir do arquivo local; se o local está em CRLF e o
+# que o atualizador baixa está em LF, o hash NUNCA bate — toda
+# atualização falha permanentemente com "hash não confere", mesmo com a
+# rede perfeita (achado real, teste de 2026-09-08). Forçar LF nos dois
+# lados (repositório e checkout) elimina a diferença na raiz.
+#
+# PROPOSITALMENTE não mexe em *.ps1/*.sh aqui — esses já têm exigências
+# de BOM/encoding específicas descobertas na prática (ver LEIAME-windows
+# e o histórico do projeto) e não são hasheados pelo manifesto.
+
+*.py   text eol=lf
+*.svg  text eol=lf
+manifesto.json text eol=lf
