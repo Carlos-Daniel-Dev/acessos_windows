@@ -558,6 +558,28 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
         cogitava antes da decisão de repositório público; ok pra 8 pessoas
         checando ocasionalmente, mas vale não checar com muita frequência);
         a parte de baixar e aplicar os arquivos mudados de verdade.
+  - [x] **Teste real de ponta a ponta contra a Release v0.2.2, 2026-09-08**:
+        rodando o build antigo (v0.2.1) de verdade, clicando nos botões via
+        automação de mouse (diálogos do GTK são modais) — a checagem e o
+        aviso (chip + "Atualizar agora") funcionaram perfeitamente contra a
+        API/Release pública de verdade. O clique em "Atualizar" revelou um
+        **bug real**: "Falha ao atualizar — hash não confere após o
+        download". Causa raiz, NÃO é rede: o repositório está com
+        `core.autocrlf=true`; os `.py` no working tree do Windows ficam com
+        `CRLF`, mas o Git sempre armazena (e o GitHub sempre serve via
+        `raw.githubusercontent.com`/API de conteúdo) o blob normalizado em
+        `LF`. `gerar_manifesto.ps1` calculava o SHA-256 a partir do arquivo
+        local em CRLF — o hash gravado no manifesto publicado NUNCA batia
+        com o que `atualizador.py` baixa (sempre LF), pra qualquer arquivo
+        `.py`/texto, permanentemente (não é uma falha transitória — tentar
+        de novo não resolve). Corrigido criando `.gitattributes`
+        (`*.py`/`*.svg`/`manifesto.json` com `eol=lf`, deliberadamente sem
+        mexer em `*.ps1`/`*.sh` — já têm exigências de BOM próprias
+        testadas antes), forçando o checkout local pra LF e regerando o
+        manifesto (`gerar_manifesto.ps1 -Versao 0.2.3`) — o hash resultante
+        de `python/acessos.py` (`20c59b77...`, 266050 bytes) bateu
+        exatamente com o que o GitHub já servia. Release nova publicada pra
+        concluir o teste com o fix aplicado.
 
 ## Ordem sugerida de ataque
 
