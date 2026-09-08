@@ -1,14 +1,14 @@
 ﻿{
-    "versao":  "2026.09.08.1406",
-    "gerado_em":  "2026-09-08T18:06:46Z",
+    "versao":  "2026.09.08.1631",
+    "gerado_em":  "2026-09-08T20:31:40Z",
     "copiar":  {
                    "python/acessos.py":  {
-                                             "sha256":  "965a3716f7a5edac2340d0183031d5a26d2eae4e881d544656a0e13ed316e600",
-                                             "bytes":  259273
+                                             "sha256":  "1b4f1723422abf4ae10042f3c779f1115f1c3ee537b4b3ca4f9dd1dc66949b72",
+                                             "bytes":  272281
                                          },
                    "python/vncwidget.py":  {
-                                               "sha256":  "19f3ca19f3b2131f21b773d7c86db4bb2484d8f9aeeae2e591dfbb57c4e2de65",
-                                               "bytes":  34406
+                                               "sha256":  "15181c7aeabdbdceb74a5c306c2dac4794d9ceaa97642f8d564492ecb0c9eb7c",
+                                               "bytes":  35264
                                            },
                    "python/sftp.py":  {
                                           "sha256":  "9eda0418843e760bcf2a81187c6183ed39ee46fc34a3e7d4ee6b0c11ff2b4cf4",
@@ -19,12 +19,12 @@
                                            "bytes":  23653
                                        },
                    "python/tema.py":  {
-                                          "sha256":  "bc39a937eee82c0367db2e6367d8c5824723ec1f646ebde818c03bc8163debe1",
-                                          "bytes":  32191
+                                          "sha256":  "13ac4cc067e4dd7b092686fe7d698ae42cf791b56590002d779340b76261082b",
+                                          "bytes":  33218
                                       },
                    "python/rdp_windows.py":  {
-                                                 "sha256":  "a4a2d53bcbf9b638acb6c8508e01de60c0486027958251c261f6e86282fc5367",
-                                                 "bytes":  14823
+                                                 "sha256":  "ec6a954f497faff05149571d52560f0995d474e643604baffd6831c6af60b9d5",
+                                                 "bytes":  15177
                                              },
                    "python/ssh_windows.py":  {
                                                  "sha256":  "5fd3e7a5cc1e8a2bc37ed81e05a9930fc584032f132c5207908127e93b392d36",
@@ -42,6 +42,10 @@
                                                      "sha256":  "a8ff920afe3a9dd99a98778ca1e74d4ec60cde3887a38f4d0d30d55b2b5b1217",
                                                      "bytes":  22326
                                                  },
+                   "python/atualizador.py":  {
+                                                 "sha256":  "e814ec35647e212d0874c7cef6e25536b2fe9c8a2db57358f7367efca7a4456c",
+                                                 "bytes":  11804
+                                             },
                    "icones/acessos.svg":  {
                                               "sha256":  "4ec6bc04f7d9cfed33b0e757d52e8e7a27a6308daee3234ef9052105de0dbba8",
                                               "bytes":  1168

@@ -204,14 +204,20 @@ PyInstaller de novo) e a mudança apareceu no `log.txt` na próxima abertura.
 Isso é o pré-requisito pra uma futura auto-atualização via GitHub (ver
 Item 5 do backlog) só sobrescrever o `.py` que mudou, sem reinstalar tudo.
 
-**Checagem de atualização via GitHub, construída** (2026-09-08):
+**Auto-atualização via GitHub, construída e testada** (2026-09-08):
 `python/atualizador.py` compara a versão local (lida do `manifesto.json`
-embutido no bundle) contra a última GitHub Release do repositório —
-público, sem autenticação nenhuma. Só avisa (um chip no rodapé da janela
-principal); não baixa nem aplica nada sozinho. **Repositório ainda não
-existe** — preencher `DONO_REPO`/`NOME_REPO` no topo do arquivo quando ele
-for criado; até lá, a checagem simplesmente não encontra nada e não avisa
-nada, sem quebrar o app.
+embutido no bundle) contra a última GitHub Release do repositório
+(`Carlos-Daniel-Dev/acessos_windows`, ainda **privado** hoje — precisa
+virar público antes da checagem funcionar de verdade). Avisa com um chip
++ botão "Atualizar agora" no rodapé; com confirmação do operador, baixa
+os `.py` que mudaram (por hash, nunca por nome/data), confere o SHA-256
+de cada download ANTES de sobrescrever, faz backup do arquivo antigo, e
+oferece reiniciar o app pra usar a versão nova — **sem baixar/reinstalar
+o `.exe` inteiro**. Não cobre o `vncshim.dll` (não pode ser recompilado
+sem um compilador C embutido) — uma mudança nele continua exigindo
+reinstalar via `.exe` novo. Testado com rede simulada (o repositório real
+ainda não tem release publicada); falta testar contra o GitHub de
+verdade assim que o repositório virar público.
 
 ## Ordem sugerida pra testar
 
