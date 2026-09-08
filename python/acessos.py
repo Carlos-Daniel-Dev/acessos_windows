@@ -3896,7 +3896,8 @@ class Janela(Gtk.Window):
         self.bt_lateral.connect("toggled", self._alternar_lateral)
         esq.pack_start(self.bt_lateral, False, False, 0)
         esq.pack_start(rotulo("Acessos", "marca-topo"), False, False, 4)
-        esq.pack_start(rotulo("VNC · SSH · RDP", "marca-sub"), False, False, 0)
+        esq.pack_start(rotulo("VNC · SSH · RDP · atualizado ✓", "marca-sub"),
+                      False, False, 0)
         self.lb_captura = chip("⌨ CAPTURADO — Pause libera", "atencao")
         self.lb_captura.set_no_show_all(True)
         esq.pack_start(self.lb_captura, False, False, 4)
