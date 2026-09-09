@@ -1,10 +1,10 @@
 ﻿{
-    "versao":  "0.2.3",
-    "gerado_em":  "2026-09-08T21:00:52Z",
+    "versao":  "0.2.4",
+    "gerado_em":  "2026-09-09T11:34:53Z",
     "copiar":  {
                    "python/acessos.py":  {
-                                             "sha256":  "20c59b7719e6b9eafaef8ba283ee9035a3e5e15abf0f6dc62ad32b627e294fc3",
-                                             "bytes":  266050
+                                             "sha256":  "4115b93fbf5a2a1456c12462973d68bbd72ebd24164b3e5fb0b4ce8cdf0527d7",
+                                             "bytes":  266485
                                          },
                    "python/vncwidget.py":  {
                                                "sha256":  "19f3ca19f3b2131f21b773d7c86db4bb2484d8f9aeeae2e591dfbb57c4e2de65",
@@ -43,8 +43,8 @@
                                                      "bytes":  22326
                                                  },
                    "python/atualizador.py":  {
-                                                 "sha256":  "e814ec35647e212d0874c7cef6e25536b2fe9c8a2db57358f7367efca7a4456c",
-                                                 "bytes":  11804
+                                                 "sha256":  "ea34f0258f3fd1cb290ffcba6da888003c13851f542935b63822ef96d42d6596",
+                                                 "bytes":  13115
                                              },
                    "icones/acessos.svg":  {
                                               "sha256":  "4ec6bc04f7d9cfed33b0e757d52e8e7a27a6308daee3234ef9052105de0dbba8",
