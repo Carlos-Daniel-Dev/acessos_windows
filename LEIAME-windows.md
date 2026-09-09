@@ -436,3 +436,17 @@ se `[geral] caminho=` estiver apontando pra outro lugar) e só apaga
 depois de o usuário digitar `APAGAR` — não há confirmação automática
 nem `-Forcar`, de propósito, porque não existe *undo* pra isso (nem o
 `historico/`, que normalmente é a rede de segurança, sobrevive).
+
+## Versão sempre visível + fechar o aviso de atualização (2026-09-09)
+
+Dois ajustes no rodapé, pedidos depois de reparar que o chip de
+"atualização disponível" ficava sem jeito de dispensar:
+
+- Rótulo novo (`v0.4.2`, por exemplo) SEMPRE visível no rodapé, tenha ou
+  não rede/atualização — antes só dava pra saber a versão instalada
+  abrindo o `manifesto.json` na mão.
+- O chip de atualização disponível ganhou um "×" (`_dispensar_atualizacao`)
+  — fecha o aviso sem aplicar nada, e grava `atualizacao_dispensada` em
+  `[geral]` no `conexoes.ini` pra não voltar sozinho a cada arranque. Uma
+  versão MAIS NOVA que a dispensada some por conta própria da comparação
+  em `_ao_verificar_atualizacao` — não precisa "reabrir" nada na mão.

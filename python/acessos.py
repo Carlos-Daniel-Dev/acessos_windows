@@ -5852,9 +5852,18 @@ class Janela(Gtk.Window):
         cx = Gtk.Box(spacing=8)
         cx.set_border_width(5)
         cx.pack_start(rotulo(self.caminho, "rodape-info"), True, True, 0)
-        # os dois escondidos por padrao: so aparecem se
+        # versao instalada: SEMPRE visivel, tenha ou nao rede/atualizacao —
+        # antes so se sabia a versao rodando abrindo o manifesto.json na
+        # mao. Ao contrario do chip abaixo, este rotulo nunca some.
+        versao_atual = TEM_ATUALIZADOR and _atualizador.versao_local()
+        self.lb_versao = rotulo(
+            "v%s" % versao_atual if versao_atual else "versão desconhecida",
+            "rodape-info")
+        cx.pack_start(self.lb_versao, False, False, 0)
+        # os tres escondidos por padrao: so aparecem se
         # _ao_verificar_atualizacao() encontrar uma versao mais nova (ver
-        # _iniciar_checagem_atualizacao)
+        # _iniciar_checagem_atualizacao) E essa versao ainda nao tiver sido
+        # dispensada pelo operador (ver _dispensar_atualizacao)
         self.bt_aplicar_atualizacao = add_class(
             Gtk.Button(label="Atualizar agora"), "secundaria")
         self.bt_aplicar_atualizacao.set_no_show_all(True)
@@ -5865,6 +5874,15 @@ class Janela(Gtk.Window):
         self.chip_atualizacao.set_no_show_all(True)
         self.chip_atualizacao.set_visible(False)
         cx.pack_end(self.chip_atualizacao, False, False, 0)
+        # "×" pra fechar o aviso sem atualizar agora — grava a versao
+        # dispensada no INI (ver _dispensar_atualizacao) pra nao voltar
+        # sozinho a cada arranque, so quando sair uma versao MAIS NOVA
+        self.bt_fechar_atualizacao = botao_fechar_aba(self._dispensar_atualizacao)
+        self.bt_fechar_atualizacao.set_tooltip_text(
+            "Fechar aviso (só volta quando sair uma versão mais nova)")
+        self.bt_fechar_atualizacao.set_no_show_all(True)
+        self.bt_fechar_atualizacao.set_visible(False)
+        cx.pack_end(self.bt_fechar_atualizacao, False, False, 0)
         self.lb_conta = rotulo("%d máquinas" % len(self.conexoes),
                                "rodape-info", xalign=1.0)
         cx.pack_end(self.lb_conta, False, False, 0)
@@ -5888,9 +5906,16 @@ class Janela(Gtk.Window):
         garantido por atualizador.verificar_async) — so aqui e seguro
         mexer no chip/botao. Guarda manifesto_remoto/tag pra
         _aplicar_atualizacao() nao precisar buscar tudo de novo."""
+        if (tem_atualizacao and
+                versao_nova == self.geral.get("atualizacao_dispensada", "")):
+            # o operador ja fechou o aviso pra ESSA versao especifica (ver
+            # _dispensar_atualizacao) — nao insiste a cada arranque; so
+            # volta a aparecer quando sair uma versao diferente daquela
+            tem_atualizacao = False
         if tem_atualizacao:
             self._manifesto_atualizacao = manifesto_remoto
             self._tag_atualizacao = tag
+            self._versao_nova_atualizacao = versao_nova
             self.chip_atualizacao.set_text(
                 "atualização disponível: %s" % versao_nova)
             self.chip_atualizacao.set_tooltip_text(
@@ -5898,7 +5923,25 @@ class Janela(Gtk.Window):
                 (versao_local, versao_nova))
             self.chip_atualizacao.set_visible(True)
             self.bt_aplicar_atualizacao.set_visible(True)
+            # container (EventBox com um Label dentro) — precisa de
+            # revelar(), nao so set_visible(): ver docstring de revelar()
+            revelar(self.bt_fechar_atualizacao)
         return False  # GLib.idle_add: nao repetir
+
+    def _dispensar_atualizacao(self):
+        """Fecha o aviso de atualização sem aplicar nada.
+
+        Grava a versão dispensada em [geral] no conexoes.ini — não é só
+        "esconder até fechar o app": sem persistir, o aviso voltaria
+        sozinho no próximo arranque, e "fechar" deixaria de significar
+        fechar de verdade. Uma versão MAIS NOVA que essa some por conta
+        própria da comparação (ver _ao_verificar_atualizacao)."""
+        self.chip_atualizacao.set_visible(False)
+        self.bt_aplicar_atualizacao.set_visible(False)
+        self.bt_fechar_atualizacao.set_visible(False)
+        versao_nova = getattr(self, "_versao_nova_atualizacao", None)
+        if versao_nova:
+            self.gravar(SECAO_GERAL, "atualizacao_dispensada", versao_nova)
 
     def _aplicar_atualizacao(self, _btn=None):
         """Pede confirmacao, depois baixa e aplica os arquivos mudados em
