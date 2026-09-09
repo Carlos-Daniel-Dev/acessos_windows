@@ -39,6 +39,7 @@ com chave errada pode sair parecendo texto. Duas garantias reais:
 """
 
 import base64
+import sys
 import os
 import secrets
 
@@ -298,140 +299,27 @@ except Exception:                                     # pragma: no cover
     Gtk, TEM_GTK = None, False
 
 
-# ESTILO: resolvido em TEMPO DE CHAMADA, nao no import.
+# ESTILO E FORMATOS: agora vivem no dialogo_ui.
 #
-# O acessos.py importa este modulo no topo, muito antes de definir
-# add_class/botao_dialogo/rotulo. Um "from acessos import ..." aqui em cima
-# pegaria o modulo pela metade e falharia — e a degradacao seria SILENCIOSA:
-# os dialogos apareceriam sem o tema do app e ninguem entenderia por que.
-# Resolvendo na primeira chamada, o acessos ja esta carregado por inteiro.
-_ESTILO = {}
-
-
-def _est():
-    """Devolve os helpers de estilo do app, ou equivalentes neutros."""
-    if _ESTILO:
-        return _ESTILO
-    try:
-        # O app roda como script (./acessos.py), entao ele vive em
-        # sys.modules["__main__"], NAO em sys.modules["acessos"]. Um
-        # "import acessos" aqui carregaria uma SEGUNDA copia do modulo —
-        # outro estado, outros globais — em vez de achar a que esta rodando.
-        # Por isso procuramos primeiro no __main__.
-        import sys as _sys
-        acessos = _sys.modules.get("__main__")
-        if not hasattr(acessos, "botao_dialogo"):
-            acessos = _sys.modules.get("acessos")
-        if acessos is None or not hasattr(acessos, "botao_dialogo"):
-            raise ImportError("acessos ainda não carregado")
-        _ESTILO.update(
-            add_class=acessos.add_class,
-            botao=acessos.botao_dialogo,
-            area=acessos.marcar_area_acao,
-            rotulo=acessos.rotulo,
-            tem=True)
-    except Exception:
-        def add_class(w, *nomes):
-            for n in nomes:
-                w.get_style_context().add_class(n)
-            return w
-
-        def botao(dlg, texto, resposta, *classes):
-            bt = dlg.add_button(texto, resposta)
-            add_class(bt, *classes)
-            bt.set_can_focus(False)
-            return bt
-
-        def rot(texto, *classes, **kw):
-            lb = Gtk.Label(label=texto, xalign=kw.pop("xalign", 0.0))
-            return add_class(lb, *classes)
-
-        _ESTILO.update(add_class=add_class, botao=botao,
-                       area=lambda _d: None, rotulo=rot, tem=False)
-    return _ESTILO
-
-
-def add_class(w, *nomes):
-    return _est()["add_class"](w, *nomes)
-
-
-def botao_dialogo(dlg, texto, resposta, *classes):
-    return _est()["botao"](dlg, texto, resposta, *classes)
-
-
-def marcar_area_acao(dlg):
-    return _est()["area"](dlg)
-
-
-def _rotulo(texto, *classes, **kw):
-    return _est()["rotulo"](texto, *classes, **kw)
-
-
-def _liberar_grab():
-    """Desfaz gtk_grab_add() pendente — ver liberar_grab_gtk no acessos.py.
-
-    Sem isto, um dialogo aberto enquanto ha sessao RDP ativa aparece mas nao
-    aceita clique, porque o grab do GTK entrega todos os eventos a outro
-    widget."""
-    try:
-        for _ in range(8):
-            w = Gtk.grab_get_current()
-            if w is None:
-                break
-            Gtk.grab_remove(w)
-    except Exception:
-        pass
-
-
-def _dialogo(titulo, pai):
-    """Casca no padrao das outras telas do app."""
-    _liberar_grab()
-    dlg = Gtk.Dialog(title=titulo, transient_for=pai, modal=True)
-    add_class(dlg, "acessos-dialogo")
-    marcar_area_acao(dlg)
-    cx = dlg.get_content_area()
-    cx.set_border_width(14)
-    cx.set_spacing(6)
-    return dlg, cx
-
-
-def _campo_senha(caixa, texto_rotulo, dlg=None, resposta=None):
-    caixa.pack_start(_rotulo(texto_rotulo, "rotulo"), False, False, 0)
-    ent = Gtk.Entry()
-    ent.set_visibility(False)
-    ent.set_input_purpose(Gtk.InputPurpose.PASSWORD)
-    if dlg is not None and resposta is not None:
-        # mesmo padrao do pedir_senha(): Enter ligado direto a resposta, e
-        # nao via activates_default
-        ent.connect("activate", lambda _e: dlg.response(resposta))
-    caixa.pack_start(ent, False, False, 0)
-    return ent
-
-
-def _nota(caixa, texto, *classes):
-    lb = _rotulo(texto, *(classes or ("secundario",)), ellipsize=None)
-    lb.set_line_wrap(True)
-    lb.set_max_width_chars(52)
-    caixa.pack_start(lb, False, False, 0)
-    return lb
+# Este bloco redefinia add_class/botao_dialogo por conta propria, duplicando
+# o que o acessos.py ja tinha, e _erro/_aviso usavam Gtk.MessageDialog — que
+# traz o estilo do SISTEMA e ignora boa parte do CSS do app. Era por isso que
+# os dialogos do cofre pareciam de outro programa.
+#
+# Os nomes locais abaixo sao mantidos de proposito: o resto do arquivo ja os
+# usa, e trocar cada chamada seria mexer em codigo que funciona sem precisar.
+from dialogo_ui import (add_class, botao_dialogo, marcar_area_acao,  # noqa: E402
+                        rotulo as _rotulo, liberar_grab as _liberar_grab,
+                        dialogo as _dialogo, nota as _nota,
+                        campo_senha as _campo_senha, avisar as _avisar)
 
 
 def _erro(pai, texto):
-    d = Gtk.MessageDialog(transient_for=pai, modal=True,
-                          message_type=Gtk.MessageType.ERROR,
-                          buttons=Gtk.ButtonsType.OK, text=texto)
-    add_class(d, "acessos-dialogo")
-    d.run()
-    d.destroy()
+    _avisar(pai, texto, erro=True)
 
 
 def _aviso(pai, texto):
-    d = Gtk.MessageDialog(transient_for=pai, modal=True,
-                          message_type=Gtk.MessageType.INFO,
-                          buttons=Gtk.ButtonsType.OK, text=texto)
-    add_class(d, "acessos-dialogo")
-    d.run()
-    d.destroy()
+    _avisar(pai, texto)
 
 
 def dialogo_criar(pai=None):
@@ -510,6 +398,59 @@ def dialogo_trocar(cofre_atual, pai=None):
         return a
 
 
+PALAVRA_RESET = "REINICIALIZAR"
+
+
+def _do_app(nome):
+    """Pega uma funcao do app que esta RODANDO.
+
+    "from acessos import x" carregaria uma SEGUNDA copia do modulo — outro
+    estado, outros globais — porque o app roda como script e vive em
+    sys.modules["__main__"], nao em sys.modules["acessos"]. Mesma armadilha
+    ja documentada no dialogo_ui.
+    """
+    for chave in ("__main__", "acessos"):
+        mod = sys.modules.get(chave)
+        if mod is not None and hasattr(mod, nome):
+            return getattr(mod, nome)
+    raise ErroCofre("função %s indisponível (app não carregado)" % nome)
+
+
+def _limpar_sigilosos(caminho, cp):
+    """Esvazia os campos de senha de todas as secoes de conexao.
+
+    Chamado so na reinicializacao: o que estava cifrado com a chave antiga
+    virou lixo indecifravel, e deixar isso no arquivo so serve para alguem
+    tentar quebrar depois.
+    """
+    _gs = _do_app("gravar_secao")
+    for secao in cp.sections():
+        if secao == SECAO_COFRE:
+            continue
+        pares = [(campo, "") for campo in CAMPOS_SIGILOSOS
+                 if cp[secao].get(campo)]
+        if pares:
+            _gs(caminho, secao, pares)
+
+
+def _confirmar_reset(pai):
+    """Confirmacao explicita, cronometrada, com o custo escrito por extenso.
+
+    Cinco segundos, nao tres: o que se perde aqui sao todas as senhas
+    guardadas e nao ha desfazer. O tempo existe para quebrar o automatismo
+    de quem ja esta com a mao no Enter.
+    """
+    import dialogo_ui
+    return dialogo_ui.confirmar(
+        pai, "Reinicializar o cofre?",
+        "Todas as senhas guardadas serão APAGADAS e um cofre novo será "
+        "criado com a senha que você definir a seguir.\n\n"
+        "As conexões e os dados de acesso continuam; apenas as senhas se "
+        "perdem. Uma cópia do conexoes.ini é guardada em historico/ antes "
+        "da alteração.",
+        ok="Apagar e recriar", perigo=True, contagem=5)
+
+
 def dialogo_abrir(cofre, pai=None):
     """Pede a senha mestra. Devolve 'ok', 'trocar' ou None (cancelou).
 
@@ -520,6 +461,34 @@ def dialogo_abrir(cofre, pai=None):
     botao_dialogo(dlg, "Sair", Gtk.ResponseType.CANCEL, "perigo")
     botao_dialogo(dlg, "Trocar senha…", Gtk.ResponseType.APPLY, "secundaria")
     botao_dialogo(dlg, "Abrir", Gtk.ResponseType.OK, "acao")
+
+    # AJUDA no "?" da barra de titulo, ao lado do fechar.
+    #
+    # A reinicializacao NAO tem botao aqui de proposito: um botao ao lado
+    # do campo de senha e o botao que se ve depois de errar a senha tres
+    # vezes — o pior momento possivel para oferecer "apagar tudo". Fica
+    # atras de uma palavra digitada, que exige intencao e conhecimento.
+    try:
+        hb = dlg.get_titlebar()
+        if hb is not None:
+            bt_ajuda = Gtk.Button(label="?")
+            add_class(bt_ajuda, "dlg-x")
+            bt_ajuda.set_tooltip_text("Ajuda")
+            bt_ajuda.connect("clicked", lambda _b: _avisar(
+                dlg,
+                "As senhas guardadas são cifradas com a senha mestra e o "
+                "sal gravado na seção [cofre] do conexoes.ini.\n\n"
+                "Perdeu a senha mestra? Digite REINICIALIZAR no campo de "
+                "senha e confirme. Isso cria um cofre novo e APAGA todas "
+                "as senhas guardadas — as conexões continuam, só as senhas "
+                "se perdem.\n\n"
+                "Uma cópia do arquivo é guardada em historico/ antes de "
+                "qualquer alteração.",
+                titulo="Sobre o cofre"))
+            hb.pack_end(bt_ajuda)
+            bt_ajuda.show()
+    except Exception:
+        pass
 
     cx.pack_start(_rotulo("SENHA MESTRA", "rotulo"), False, False, 0)
     _nota(cx, "Necessária para usar as senhas guardadas.")
@@ -535,6 +504,13 @@ def dialogo_abrir(cofre, pai=None):
         if resp != Gtk.ResponseType.OK:
             dlg.destroy()
             return None
+        if ent.get_text().strip() == PALAVRA_RESET:
+            if _confirmar_reset(dlg):
+                dlg.destroy()
+                return "reiniciar"
+            ent.set_text("")
+            ent.grab_focus()
+            continue
         try:
             cofre.abrir(ent.get_text())
         except SenhaIncorreta:
@@ -638,6 +614,27 @@ def destrancar(caminho, pai=None):
                 return None, False
             if r == "ok":
                 return c, True
+            if r == "reiniciar":
+                # cofre novo do zero: as senhas antigas ficam no arquivo
+                # cifradas com a chave velha e nao abrem mais, entao sao
+                # limpas junto — deixa-las seria lixo indecifravel.
+                senha = dialogo_criar(pai)
+                if senha is None:
+                    continue
+                c2 = Cofre()
+                c2.criar(senha)
+                try:
+                    _limpar_sigilosos(caminho, cp)
+                    _do_app("gravar_secao")(
+                        caminho, SECAO_COFRE,
+                        list(c2.parametros().items()))
+                except Exception as e:
+                    _erro(pai, "Falha ao reinicializar: %s" % e)
+                    continue
+                _aviso(pai, "Cofre reinicializado. As senhas anteriores "
+                            "foram apagadas.\nO arquivo anterior está em "
+                            "historico/.")
+                return c2, True
             # trocar senha, direto da primeira janela
             nova = dialogo_trocar(c, pai)
             if nova is None:

@@ -41,6 +41,9 @@ $ArquivosCopiar = @(
     "python\conpty.py",
     "python\bandeja_windows.py",
     "python\atualizador.py",
+    "python\dialogo_ui.py",
+    "python\massa.py",
+    "python\massa_ui.py",
     "icones\acessos.svg"
 )
 # python\launcher.py PROPOSITALMENTE fora desta lista: e o unico modulo

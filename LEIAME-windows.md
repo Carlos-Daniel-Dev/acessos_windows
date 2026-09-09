@@ -28,13 +28,19 @@ copiados aqui, os inalterados junto dos novos/patchados.
 | `python/ssh_windows.py` | **novo** — `AbaSshWindows`: `ssh.exe` nativo hospedado via ConPTY (`conpty.py`) + `pyte` |
 | `python/vncwidget.py` | **patchado** — só o carregador do shim (`.dll` em vez de `.so`); resto idêntico ao original |
 | `python/acessos.py` | **patchado** — importa os módulos Windows condicionalmente (`sys.platform == "win32"`) nos mesmos pontos onde já escolhia entre `AbaRdp`/`AbaRdpEmbutido` e montava `AbaSsh` |
-| `python/sftp.py`, `cofre.py`, `tema.py` | **inalterados** — já são portáveis (paramiko/cryptography puros) |
+| `python/sftp.py` | **inalterado** — já é portável (paramiko puro) |
+| `python/cofre.py`, `tema.py` | **acompanham o Linux** — copiados direto na atualização de 2026-09-09 (ver seção abaixo); sem patch Windows-específico |
+| `python/dialogo_ui.py` | **novo (portado do Linux em 2026-09-09)** — formatos de diálogo compartilhados (`avisar`/`confirmar`/`perguntar`/`editor`); GTK puro, sem adaptação |
+| `python/massa.py` | **novo (portado do Linux em 2026-09-09)** — motor de execução em lote via SSH; Python puro com `paramiko`, sem GTK, sem adaptação |
+| `python/massa_ui.py` | **novo (portado do Linux em 2026-09-09)** — aba de UI da execução em lote; GTK puro, sem adaptação |
 | `src/vncshim.c` | **inalterado** — compilado para `.dll` pelo `instalar.ps1`, mesmo código C |
 | `icones/acessos.svg` | inalterado |
 | `icones/acessos.ico` | **novo** — gerado por `gerar_ico.py`, usado como ícone do `.exe` e do atalho |
 
-`massa.py`/`massa_ui.py` **não foram portados**, por instrução explícita do
-LEIAME original.
+`massa.py`/`massa_ui.py` **portados em 2026-09-09** — decisão revisitada ao
+trazer as atualizações do Linux (ver seção "Atualização de 2026-09-09"
+abaixo). O motor (`massa.py`) é Python puro com `paramiko`, sem GTK nem
+nada específico de Linux; funcionou sem nenhuma adaptação.
 
 ## Decisões tomadas (resumo da conversa)
 
@@ -236,3 +242,74 @@ verdade assim que o repositório virar público.
    direito nele para reabrir o console (deve reaparecer com foco) e para
    sair pelo menu (deve fechar a janela principal e o ícone deve sumir da
    bandeja, sem ficar "fantasma" até passar o mouse em cima).
+
+## Atualização de 2026-09-09 — trazendo as atualizações do Linux
+
+O projeto Linux original avançou bastante desde o porte inicial. Recebemos
+um `.tar` com o estado atual de lá e trouxemos pro Windows tudo que fazia
+sentido, preservando cada patch Windows-específico (RDP/SSH embutidos,
+bandeja, saída sem console, `_MEIPASS`, `atualizador.py`, o seletor de
+tema segmentado `.seg-topo`). Nada disso foi perdido — foi reaplicado por
+cima da base nova do Linux, um ponto de cada vez.
+
+**O que veio:**
+
+- **`dialogo_ui.py` (novo módulo)** — os três formatos de diálogo do app
+  (`avisar`/`confirmar`, `perguntar`, `editor`) viraram um módulo
+  compartilhado. Antes o `cofre.py` duplicava esses helpers por conta
+  própria e usava `Gtk.MessageDialog` pros avisos — que traz o estilo do
+  SISTEMA e ignora boa parte do CSS do app; era por isso que os diálogos
+  do cofre pareciam de outro programa. Agora tudo usa o mesmo estilo.
+- **Histórico/backup versionado do `.ini`** — toda gravação passa por
+  `escrever_ini()` (ponto único, atômico, com `fsync`+`os.replace` e uma
+  guarda que aborta a escrita se a seção `[cofre]` seria perdida), e
+  guarda até 20 cópias anteriores em `historico/`.
+- **Reset do cofre ("esqueci a senha mestra")** — digitar `REINICIALIZAR`
+  no campo de senha mestra oferece recomeçar o cofre do zero (com
+  confirmação de 5 segundos), apagando os campos cifrados das conexões
+  (ficariam lixo indecifrável com a chave antiga) e preservando o arquivo
+  anterior em `historico/`.
+- **`[geral] caminho=`** — permite relocar `conexoes.ini`/`snippets.ini`/
+  `historico/` pra outra pasta (ex.: uma pasta sincronizada), com uma tela
+  nova em Ajustes (`_abrir_ajustes`) que usa `Gtk.FileChooserDialog`.
+- **Conexão instantânea/efêmera** — digitar algo como `10.1.1.99:22` ou
+  `rdp serv-ad-2025` na busca e apertar Enter conecta na hora, sem gravar
+  nada no `.ini` (`interpretar_alvo`/`conexao_efemera`).
+- **Indicador de vida (ping) nos cards** — bolinha ao lado de cada máquina
+  visível. **Adaptado pro Windows**: a sintaxe do `ping` diverge entre
+  plataformas (Linux usa `-c`/`-W` em segundos, o `ping.exe` do Windows usa
+  `-n`/`-w` em milissegundos) — sem a adaptação, o indicador ficaria sempre
+  cinza. Também ganhou `CREATE_NO_WINDOW` pra não piscar um console preto a
+  cada sondagem.
+- **`massa.py`/`massa_ui.py` (execução em lote) — portados e habilitados.**
+  Revisitando a decisão original de não portar: o motor é Python puro com
+  `paramiko`, sem GTK nem nada específico de Linux — funcionou sem
+  nenhuma adaptação. A barra de seleção/execução em lote, antes sempre
+  escondida no Windows, agora aparece igual ao Linux.
+- **Redesign completo do `tema.py`** — efeito "vidro"/gradiente na janela,
+  ícones simbólicos (`Gtk.IconTheme`) no lugar de texto/emoji cru nas
+  abas e nos cards (com fallback pro texto/emoji quando o tema de ícones
+  não tem o nome pedido), headerbar de diálogo redesenhada. **Preservado
+  do Windows**: o bloco `.seg-topo`/`.seg-topo-ini`/`.seg-topo-fim`/
+  `.seg-topo-meio` (paleta própria pro seletor de tema, que mora na
+  titlebar escura) e — crítico — o **fallback de fonte pra glifo**
+  (`SIMBOLOS`: Segoe UI Symbol/Emoji/Fluent Icons/MDL2) anexado no fim da
+  nova pilha de fontes (`IBM Plex Sans`/`Inter`/`Cantarell`). Sem esse
+  fallback os glifos (⚙👁📁🚫⚡⌨⧉⟳＋) voltariam a aparecer como
+  retângulo vazio no Windows — nem a fonte nova nem o Calibri antigo
+  trazem esses pontos de código.
+- **Removido, alinhado com o Linux**: a escala de fonte "grande" (botão
+  "A+", `ESCALA_FONTE`) — decisão de produto do redesign novo, não bug.
+
+**Testado**: rodando de fonte (MSYS2 python direto) e compilado
+(`compilar_exe.ps1` + `Acessos.spec`, confirmando que `dialogo_ui.py`/
+`massa.py`/`massa_ui.py` ficam soltos em `_internal\` como os demais
+módulos do projeto, não compactados no `PYZ`) — os dois sobem sem erro,
+com o seletor de tema, a barra de execução em lote e os glifos
+aparecendo corretamente.
+
+**Não testado ainda de ponta a ponta** (fica para a próxima rodada, antes
+de qualquer release "1.0.0 stable" — decisão explícita de lançar mais
+versões `0.x` primeiro): reset do cofre contra um cofre de verdade,
+relocação de pasta de dados, indicador de vida contra máquinas reais
+ligadas/desligadas, execução em lote contra um parque de verdade.

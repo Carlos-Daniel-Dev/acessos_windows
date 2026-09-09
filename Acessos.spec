@@ -74,11 +74,11 @@ if lista_freerdp and os.path.isfile(lista_freerdp):
                 binarios.append((caminho, "."))
 
 # módulos do projeto — precisam bater com python\*.py (menos launcher.py,
-# que fica compilado de propósito, e massa.py/massa_ui.py, não portados)
+# que fica compilado de propósito)
 MODULOS_PROJETO = {
     "acessos", "tema", "cofre", "sftp", "vncwidget",
     "rdp_windows", "ssh_windows", "win_embed", "conpty", "bandeja_windows",
-    "atualizador",
+    "atualizador", "dialogo_ui", "massa", "massa_ui",
 }
 
 a = Analysis(

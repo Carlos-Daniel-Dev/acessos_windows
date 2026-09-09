@@ -639,3 +639,18 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
    reiniciar o título mostrou "atualizado ✓". No caminho, um bug real de
    CRLF vs LF no hash do manifesto foi encontrado e corrigido (PR #4,
    `.gitattributes`) — ver o relato completo acima, nesta mesma seção.
+6. **Item 6 — trazer as atualizações do Linux (2026-09-09)**. O Linux
+   original recebeu bastante coisa desde o porte inicial: `dialogo_ui.py`
+   (módulo de diálogos compartilhado), histórico/backup versionado do
+   `.ini`, reset do cofre, `[geral] caminho=` (pasta de dados relocável),
+   conexão instantânea/efêmera, indicador de vida (ping) nos cards,
+   `massa.py`/`massa_ui.py` (execução em lote — decisão de não portar
+   revisitada e revertida) e um redesign completo do `tema.py`. Tudo
+   portado preservando cada patch Windows-específico (RDP/SSH embutidos,
+   bandeja, `atualizador.py`, `.seg-topo`, fallback de fonte pra glifo) —
+   ver `LEIAME-windows.md`, seção "Atualização de 2026-09-09", para o
+   relato completo. Testado rodando de fonte e compilado
+   (`compilar_exe.ps1`); **decisão explícita: mais releases `0.x` antes de
+   qualquer "1.0.0 stable"** — reset do cofre, relocação de pasta,
+   indicador de vida e execução em lote ainda precisam de teste de ponta a
+   ponta contra dados/máquinas de verdade.
