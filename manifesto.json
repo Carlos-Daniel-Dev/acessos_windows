@@ -1,10 +1,10 @@
 ﻿{
-    "versao":  "0.3.0",
-    "gerado_em":  "2026-09-09T12:27:35Z",
+    "versao":  "0.4.0",
+    "gerado_em":  "2026-09-09T14:26:27Z",
     "copiar":  {
                    "python/acessos.py":  {
-                                             "sha256":  "41bcb86245b6e21735e36104071552595ee702743145e0f18de4c882d31ab1b7",
-                                             "bytes":  304965
+                                             "sha256":  "56e64af2e0514b5b6d14878842f28e96e80c0b91347e912ac4ed325b7889d313",
+                                             "bytes":  308672
                                          },
                    "python/vncwidget.py":  {
                                                "sha256":  "19f3ca19f3b2131f21b773d7c86db4bb2484d8f9aeeae2e591dfbb57c4e2de65",
@@ -19,8 +19,8 @@
                                            "bytes":  24540
                                        },
                    "python/tema.py":  {
-                                          "sha256":  "e4dceb7e099a0e2d3e7821208f6b608330d2e1c722ac6f9388bc4298ae75dfb1",
-                                          "bytes":  48344
+                                          "sha256":  "8b065f71dcf33547d4de73de1d742a1063a1d2e6ea02835bca45041b38c8e40c",
+                                          "bytes":  54473
                                       },
                    "python/rdp_windows.py":  {
                                                  "sha256":  "a4a2d53bcbf9b638acb6c8508e01de60c0486027958251c261f6e86282fc5367",
@@ -58,6 +58,10 @@
                                               "sha256":  "10d90aa060411ddc6d4e480c83d5444dbd447b0da6cd584d7f822b407bbc5c4c",
                                               "bytes":  37860
                                           },
+                   "python/importar_rdm.py":  {
+                                                  "sha256":  "231ff58d2fe45665767ba9551b7b3080c915db2b583df66528e346eb06f7c3b3",
+                                                  "bytes":  10267
+                                              },
                    "icones/acessos.svg":  {
                                               "sha256":  "4ec6bc04f7d9cfed33b0e757d52e8e7a27a6308daee3234ef9052105de0dbba8",
                                               "bytes":  1168

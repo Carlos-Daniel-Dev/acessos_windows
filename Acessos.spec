@@ -78,7 +78,7 @@ if lista_freerdp and os.path.isfile(lista_freerdp):
 MODULOS_PROJETO = {
     "acessos", "tema", "cofre", "sftp", "vncwidget",
     "rdp_windows", "ssh_windows", "win_embed", "conpty", "bandeja_windows",
-    "atualizador", "dialogo_ui", "massa", "massa_ui",
+    "atualizador", "dialogo_ui", "massa", "massa_ui", "importar_rdm",
 }
 
 a = Analysis(

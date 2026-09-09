@@ -44,6 +44,7 @@ $ArquivosCopiar = @(
     "python\dialogo_ui.py",
     "python\massa.py",
     "python\massa_ui.py",
+    "python\importar_rdm.py",
     "icones\acessos.svg"
 )
 # python\launcher.py PROPOSITALMENTE fora desta lista: e o unico modulo

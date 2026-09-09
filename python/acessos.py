@@ -6985,6 +6985,64 @@ class Janela(Gtk.Window):
         ])
         cx.pack_start(aviso, False, False, 0)
 
+        # ---- importar do RDM
+        dialogo_ui.secao(cx, "IMPORTAR")
+        dialogo_ui.nota(
+            cx, "Traz máquinas de um export \"Export vault (.csv)\" do "
+                "Devolutions Remote Desktop Manager. Host vira a máquina, "
+                "Port decide tela (VNC)/shell (SSH)/RDP, Folder vira o "
+                "grupo. Usuário e senha não vêm no export — ficam em "
+                "branco, o Acessos pergunta na hora de conectar. Máquinas "
+                "cujo host já está cadastrado são puladas, então importar "
+                "o mesmo arquivo de novo é seguro.", "dlg-dica")
+        aviso_rdm = rotulo("", "dlg-dica", ellipsize=None)
+        aviso_rdm.set_line_wrap(True)
+
+        def _importar_rdm():
+            esc = Gtk.FileChooserDialog(
+                title="Export do RDM (.csv)", transient_for=dlg,
+                action=Gtk.FileChooserAction.OPEN)
+            esc.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+            esc.add_button("Importar", Gtk.ResponseType.OK)
+            add_class(esc, "acessos-dialogo")
+            filtro = Gtk.FileFilter()
+            filtro.set_name("CSV (*.csv)")
+            filtro.add_pattern("*.csv")
+            esc.add_filter(filtro)
+            resp = esc.run()
+            caminho_csv = esc.get_filename() if resp == Gtk.ResponseType.OK else None
+            esc.destroy()
+            if not caminho_csv:
+                return
+
+            import importar_rdm
+            try:
+                resultado = importar_rdm.importar(
+                    caminho_csv, self.caminho, escrever_ini)
+            except Exception as e:
+                add_class(aviso_rdm, "dlg-dica-erro")
+                aviso_rdm.set_text("Não consegui importar: %s" % e)
+                return
+
+            aviso_rdm.get_style_context().remove_class("dlg-dica-erro")
+            partes = ["%d máquina(s) importada(s)." % resultado["importadas"]]
+            if resultado["puladas_existentes"]:
+                partes.append("%d já cadastrada(s), pulada(s)."
+                              % resultado["puladas_existentes"])
+            aviso_rdm.set_text(" ".join(partes))
+            if resultado["avisos"]:
+                self.avisar(
+                    "Importação com avisos",
+                    "\n".join(resultado["avisos"][:20])
+                    + ("\n…" if len(resultado["avisos"]) > 20 else ""))
+            if resultado["importadas"]:
+                self._recarregar()
+
+        dialogo_ui.linha_botoes(cx, [
+            ("Importar CSV do RDM…", "acao", _importar_rdm),
+        ])
+        cx.pack_start(aviso_rdm, False, False, 0)
+
         dlg.show_all()
         dlg.run()
         dlg.destroy()

@@ -343,3 +343,48 @@ Depois do redesign do `tema.py`, duas coisas visíveis foram revisadas:
 
 Testado rodando de fonte: os dois toggles (tema Rosé + A+) renderizam
 corretamente, com os glifos legíveis nos dois tamanhos.
+
+## Importador de CSV do RDM (mesmo dia, 2026-09-09)
+
+Novo módulo `python/importar_rdm.py` — traz máquinas de um export
+**"Export vault (.csv)"** do Devolutions Remote Desktop Manager pro
+`conexoes.ini`, acessível em **Ajustes → IMPORTAR**.
+
+Só o CSV é suportado (não `.rdm`/`.json`/`.html`/`.xml` — decisão
+deliberada: `.rdm` é formato proprietário que pode trazer um blob de
+credenciais cifrado com a chave do cofre deles, impossível de decifrar
+aqui; `.json`/`.xml` têm schema aninhado desconhecido sem um exemplo
+real pra confirmar contra; `.html` normalmente nem traz os campos
+técnicos). Testado com um export real de ~225 máquinas antes de integrar
+à UI.
+
+**Mapeamento**: `Host` → host · `Port` → decide o protocolo (5900 VNC,
+3389 RDP, 22 SSH, mesma tabela `PORTA_PROTO` de `acessos.py`) · `Display
+Name` → título do card (deduplicado com sufixo numerado se repetir) ·
+`Folder` → grupo, convertendo `\` em `;` (subgrupo do Acessos). Usuário e
+senha nunca vêm no export — ficam em branco, como uma conexão cadastrada
+à mão sem preencher o campo.
+
+**Dois bugs achados testando contra o export real, corrigidos antes de
+integrar**:
+- **Mojibake de codificação** — o export trazia "ç"/"ã" como "Ã§"/"Ã£"
+  (bytes UTF-8 decodificados como Windows-1252). `_corrigir_mojibake()`
+  desfaz isso quando detecta o padrão, sem mexer em arquivos que já
+  estão certos.
+- **`/` não é separador de subpasta** — só `\` é. Uma pasta do RDM
+  chamada "AD / ARQUIVOS / IMPRESSORAS / NAS" é UM nome só (usa "/" como
+  pontuação decorativa); dividir por "/" também quebraria isso em quatro
+  grupos errados. Confirmado contra o export: essa pasta hospeda AD,
+  impressoras e NAS juntos, de propósito.
+
+**Reimportar não duplica** — hosts já cadastrados no `conexoes.ini` são
+pulados (comparação por host, não por nome), então rodar a importação
+duas vezes com o mesmo arquivo é seguro.
+
+Testado de ponta a ponta pela UI de verdade (Ajustes → Importar CSV do
+RDM…, escolhendo o arquivo pelo `Gtk.FileChooserDialog`) contra o export
+real do parque: **224 máquinas importadas**, grupos e subgrupos
+aninhados corretamente na lateral (`01_Controle - Caixas` com 198
+máquinas em 7 subgrupos, batendo exatamente com a soma), acentuação
+correta ("Balanças"), e a reimportação do mesmo arquivo confirmada como
+no-op (0 novas, todas puladas por já existirem).
