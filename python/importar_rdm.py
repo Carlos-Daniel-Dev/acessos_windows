@@ -162,31 +162,51 @@ def _hosts_existentes(caminho_ini):
 
 
 def _linhas_ini_da_maquina(entrada):
-    """Monta o bloco [seção] pra uma entrada — só os campos que ela
-    realmente precisa; Conexao.__init__ (acessos.py) já tem os defaults
-    certos pra tudo que ficar de fora (porta 5900, VNC ligado, RDP/SSH
-    desligados)."""
-    linhas = ["\n[%s]\n" % entrada["nome"], "host  = %s\n" % entrada["host"]]
-    if entrada["grupo"]:
-        linhas.append("grupo = %s\n" % entrada["grupo"])
+    """Monta o bloco [seção] pra uma entrada, no MESMO formato completo
+    que o editor de conexão (Janela._editor() em acessos.py) grava pra
+    uma conexão nova — grupo/host + os campos padrão de cada protocolo
+    (vnc/porta/modo/ronly/auto, ssh/ssh_porta/ssh_auto, rdp/rdp_porta/
+    rdp_tela/rdp_auto), escritos explicitamente mesmo quando valem só o
+    default.
 
+    ACHADO TESTANDO COM A EQUIPE (2026-09-09): a versão anterior escrevia
+    só host+grupo pros campos "puramente default" e dependia do
+    Conexao.__init__ preencher o resto EM MEMÓRIA na hora de ler — o app
+    funcionava igual, mas o arquivo .ini ficava com uma "forma" diferente
+    das conexões cadastradas à mão (menos linhas), o que confundia quem
+    abria o arquivo direto pra conferir ou editar. Esta versão escreve o
+    mesmo conjunto de campos que o editor grava, pra manter a estrutura
+    do arquivo uniforme não importa a origem da conexão."""
     protocolo = entrada["protocolo"]
-    if protocolo == "rdp":
-        linhas.append("vnc   = 0\n")
-        linhas.append("rdp   = 1\n")
-        if entrada["porta"] and entrada["porta"] != "3389":
-            linhas.append("rdp_porta = %s\n" % entrada["porta"])
-    elif protocolo == "ssh":
-        linhas.append("vnc   = 0\n")
-        linhas.append("ssh   = 1\n")
-        if entrada["porta"] and entrada["porta"] != "22":
-            linhas.append("ssh_porta = %s\n" % entrada["porta"])
-    else:
-        # "vnc" ou porta desconhecida: VNC fica ligado por padrão (mesmo
-        # comportamento de uma conexão cadastrada à mão) — melhor
-        # aparecer com a tela na porta informada do que sumir da lista.
-        if entrada["porta"] and entrada["porta"] != "5900":
-            linhas.append("porta = %s\n" % entrada["porta"])
+    e_ssh = protocolo == "ssh"
+    e_rdp = protocolo == "rdp"
+    # porta desconhecida (nenhum PORTA_PROTO bateu) cai pra VNC, com a
+    # porta informada — mesma escolha de antes: melhor aparecer com a
+    # tela numa porta não-usual do que sumir da lista.
+    e_vnc = not e_ssh and not e_rdp
+
+    linhas = ["\n[%s]\n" % entrada["nome"]]
+    linhas.append("grupo = %s\n" % (entrada["grupo"] or "Sem grupo"))
+    linhas.append("host  = %s\n" % entrada["host"])
+
+    linhas.append("vnc   = %s\n" % ("1" if e_vnc else "0"))
+    if e_vnc:
+        linhas.append("porta = %s\n" % (entrada["porta"] or "5900"))
+        linhas.append("modo  = encaixar\n")
+        linhas.append("ronly = 0\n")
+        linhas.append("auto  = 0\n")
+
+    linhas.append("ssh   = %s\n" % ("1" if e_ssh else "0"))
+    if e_ssh:
+        linhas.append("ssh_porta = %s\n" % (entrada["porta"] or "22"))
+        linhas.append("ssh_auto  = 0\n")
+
+    linhas.append("rdp   = %s\n" % ("1" if e_rdp else "0"))
+    if e_rdp:
+        linhas.append("rdp_porta = %s\n" % (entrada["porta"] or "3389"))
+        linhas.append("rdp_tela  = dinamico\n")
+        linhas.append("rdp_auto  = 0\n")
+
     return linhas
 
 

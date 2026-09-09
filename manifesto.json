@@ -1,6 +1,6 @@
 ﻿{
-    "versao":  "0.4.0",
-    "gerado_em":  "2026-09-09T14:26:27Z",
+    "versao":  "0.4.1",
+    "gerado_em":  "2026-09-09T17:57:06Z",
     "copiar":  {
                    "python/acessos.py":  {
                                              "sha256":  "56e64af2e0514b5b6d14878842f28e96e80c0b91347e912ac4ed325b7889d313",
@@ -59,8 +59,8 @@
                                               "bytes":  37860
                                           },
                    "python/importar_rdm.py":  {
-                                                  "sha256":  "231ff58d2fe45665767ba9551b7b3080c915db2b583df66528e346eb06f7c3b3",
-                                                  "bytes":  10267
+                                                  "sha256":  "4361c3b7c836a0cc5b4f5f31ad9ee68d152133d696d76e397be869abaa26bfaa",
+                                                  "bytes":  11172
                                               },
                    "icones/acessos.svg":  {
                                               "sha256":  "4ec6bc04f7d9cfed33b0e757d52e8e7a27a6308daee3234ef9052105de0dbba8",

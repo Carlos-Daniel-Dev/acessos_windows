@@ -388,3 +388,29 @@ aninhados corretamente na lateral (`01_Controle - Caixas` com 198
 máquinas em 7 subgrupos, batendo exatamente com a soma), acentuação
 correta ("Balanças"), e a reimportação do mesmo arquivo confirmada como
 no-op (0 novas, todas puladas por já existirem).
+
+### Achado testando com a equipe (mesmo dia): estrutura do bloco importado
+
+A equipe testou contra o `conexoes.ini` de produção
+(`C:\Users\<usuário>\.config\acessos\`) e reportou que o CSV "não estava
+alimentando o arquivo com as definições padrão" — a importação **estava**
+gravando (confirmado pelo `historico/`: backup antes do import, arquivo
+crescendo de ~3,8 KB pra ~25 KB, 224 seções novas), só que cada bloco
+importado só trazia `host`+`grupo` e mais o que fugia do default (ex.:
+`vnc = 0` / `rdp = 1` pra uma máquina RDP) — o resto (`porta`, `modo`,
+`ronly`, `auto`, `ssh`, `rdp` quando é 0, `rdp_tela`...) ficava de fora do
+arquivo, contando só com o default do `Conexao.__init__` (`acessos.py`)
+aplicado EM MEMÓRIA na hora de ler. Funcionava (a máquina aparecia e
+conectava certo), mas o bloco no arquivo ficava com uma "forma" mais
+enxuta do que uma conexão cadastrada à mão pelo editor (`Janela._editor()`
+grava sempre o conjunto completo de campos do protocolo, mesmo quando
+valem só o default) — abrir o `.ini` direto pra conferir ou editar uma
+máquina importada mostrava menos linhas do que o esperado.
+
+Corrigido em `_linhas_ini_da_maquina()`: agora escreve o MESMO conjunto
+de campos que o editor grava — `vnc`/`ssh`/`rdp` sempre explícitos (`0`
+ou `1`), e pro protocolo ativo os campos padrão dele também explícitos
+(`porta`/`modo`/`ronly`/`auto` pra VNC; `ssh_porta`/`ssh_auto` pra SSH;
+`rdp_porta`/`rdp_tela`/`rdp_auto` pra RDP). Reconfirmado contra o mesmo
+export real: os 224 blocos agora saem no formato completo, idêntico ao
+que o editor produziria pra cada uma dessas máquinas cadastradas à mão.
