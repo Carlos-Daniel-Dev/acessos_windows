@@ -1,10 +1,10 @@
 ﻿{
-    "versao":  "0.4.1",
-    "gerado_em":  "2026-09-09T17:57:06Z",
+    "versao":  "0.4.2",
+    "gerado_em":  "2026-09-09T18:10:58Z",
     "copiar":  {
                    "python/acessos.py":  {
-                                             "sha256":  "56e64af2e0514b5b6d14878842f28e96e80c0b91347e912ac4ed325b7889d313",
-                                             "bytes":  308672
+                                             "sha256":  "caa5af6e6ad11512c98db9ba84a4abc1a00a4bb4a68385b8fdedcba71b4bfae1",
+                                             "bytes":  310279
                                          },
                    "python/vncwidget.py":  {
                                                "sha256":  "19f3ca19f3b2131f21b773d7c86db4bb2484d8f9aeeae2e591dfbb57c4e2de65",

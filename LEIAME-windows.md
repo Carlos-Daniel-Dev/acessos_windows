@@ -414,3 +414,13 @@ ou `1`), e pro protocolo ativo os campos padrão dele também explícitos
 `rdp_porta`/`rdp_tela`/`rdp_auto` pra RDP). Reconfirmado contra o mesmo
 export real: os 224 blocos agora saem no formato completo, idêntico ao
 que o editor produziria pra cada uma dessas máquinas cadastradas à mão.
+
+## Execução em lote desligada por padrão (2026-09-09, release 0.4.2)
+
+O recurso de execução em lote (aba LOTE, botão "⚡ executar", "Detectar
+plataforma" no menu de contexto) agora vem **desligado** numa instalação
+nova. Nova chave `massa_ativa` na seção `[geral]` do `conexoes.ini`
+(`0` = desligado, padrão; `1` = ligado) — pra ativar, feche o Acessos,
+edite o `.ini` e reabra. `TEM_MASSA` continua indicando só se o módulo
+(`massa.py`/`massa_ui.py`) está presente; `massa_ativa` é a decisão de
+política, separada da capacidade.
