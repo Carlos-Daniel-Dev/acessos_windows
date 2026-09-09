@@ -313,3 +313,33 @@ de qualquer release "1.0.0 stable" — decisão explícita de lançar mais
 versões `0.x` primeiro): reset do cofre contra um cofre de verdade,
 relocação de pasta de dados, indicador de vida contra máquinas reais
 ligadas/desligadas, execução em lote contra um parque de verdade.
+
+## Ajustes de 2026-09-09 (mesmo dia) — fonte grande e tema Rosé
+
+Depois do redesign do `tema.py`, duas coisas visíveis foram revisadas:
+
+- **Botão "A+" de volta** — a escala de fonte (`ESCALA_FONTE`/
+  `ESCALA_FONTE_GRANDE`/`ESCALA_GLIFO`/`_escalar_fontes()`) tinha sido
+  removida ao adotar o redesign do Linux (decisão de produto de lá, não
+  bug). Reimplementada em cima da folha NOVA: continua sendo um multiplicador
+  aplicado em cima do CSS já pronto (regex em cima de todo `font-size:
+  Npx`), então não depende da estrutura exata das regras — funciona
+  igual não importa quanto o `tema.py` mude depois. `ESCALA_FONTE` virou
+  `1.0` (a folha nova já veio com os tamanhos calibrados; não faz sentido
+  inflar 15% por cima de novo) e `ESCALA_GLIFO` ajustado pra `1.15`
+  (a escala de glifo antiga, 1.30, ficava exagerada nos ícones do
+  redesign novo).
+- **Seletor de tema virou 3 opções, com um tema novo** — `tema.py` ganhou
+  `NOMES_TEMA` (lista ordenada `[(chave, rótulo), ...]`) e um terceiro
+  tema, `"rose"` (❀ Rosé): paleta rosa/branco, mesma estrutura de
+  `"claro"` (vidro branco, titlebar clara). **Deliberadamente idênticos
+  a `"claro"`**: os tokens de protocolo (`azul`/`verde`/`roxo` e as
+  variantes `_fraco` — VNC/SSH/RDP), os status (`ok_*`/`erro_*`/
+  `atencao_*`) e a tela remota/terminal (`palco`/`term_bg`/`term_fg`) —
+  só o cromo (fundo, cartão, titlebar, vidro, botão de ação, banner)
+  mudou pra rosa. `acessos.py` usa `segmentado(NOMES_TEMA, ...)` no
+  lugar da lista fixa de 2 itens — um tema novo em `tema.py` aparece no
+  seletor sem tocar em `acessos.py` de novo.
+
+Testado rodando de fonte: os dois toggles (tema Rosé + A+) renderizam
+corretamente, com os glifos legíveis nos dois tamanhos.

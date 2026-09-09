@@ -363,7 +363,7 @@ LARG_MIN_LATERAL = 180
 # Paleta, fontes e a folha de estilo inteira vivem em tema.py — eram 580
 # linhas de CSS no meio do codigo. Reexportamos os nomes para o resto do
 # arquivo (e para sftp.py, cofre.py e ssh.py) continuar usando como antes.
-from tema import (ACENTOS, TEMAS, MONO, SANS, COND,   # noqa: E402,F401
+from tema import (ACENTOS, TEMAS, NOMES_TEMA, MONO, SANS, COND,  # noqa: E402,F401
                   CSS_MOLDE, gerar_css, rgba, fonte_mono)
 
 
@@ -1490,7 +1490,7 @@ def dir_dados():
     return BASE_DADOS or _dir_padrao()
 
 
-def instalar_css_cedo(tema):
+def instalar_css_cedo(tema, fonte_grande=False):
     """Instala a folha de estilo ANTES de qualquer janela existir.
 
     O provider so era adicionado dentro de Janela.__init__, mas o dialogo do
@@ -1507,7 +1507,7 @@ def instalar_css_cedo(tema):
         tema = "claro"
     prov = Gtk.CssProvider()
     try:
-        prov.load_from_data(gerar_css(tema))
+        prov.load_from_data(gerar_css(tema, fonte_grande))
     except GLib.Error:
         return None
     Gtk.StyleContext.add_provider_for_screen(
@@ -1535,6 +1535,12 @@ def ler_geral(caminho, chave, padrao=""):
 def ler_tema(caminho):
     """So o tema, sem carregar o resto — usado antes do cofre abrir."""
     return ler_geral(caminho, "tema", "claro") or "claro"
+
+
+def ler_fonte_grande(caminho):
+    """So a opcao de fonte grande, sem carregar o resto — mesma ideia de
+    ler_tema(): o dialogo do cofre precisa sair no tamanho certo."""
+    return verdade(ler_geral(caminho, "fonte_grande", ""), False)
 
 
 def carregar(caminho):
@@ -4305,6 +4311,7 @@ class Janela(Gtk.Window):
         self.tema = geral.get("tema", "claro").strip().lower()
         if self.tema not in TEMAS:
             self.tema = "claro"
+        self.fonte_grande = verdade(geral.get("fonte_grande", ""), False)
         self.prov = Gtk.CssProvider()
 
         self.set_default_size(1340, 840)
@@ -4324,7 +4331,7 @@ class Janela(Gtk.Window):
         # levanta GError — sem este guarda, um erro de estilo impede o
         # programa de abrir. Melhor rodar feio do que nao rodar.
         try:
-            self.prov.load_from_data(gerar_css(self.tema))
+            self.prov.load_from_data(gerar_css(self.tema, self.fonte_grande))
         except GLib.Error as e:
             sys.stderr.write("CSS recusado (%s); seguindo com o tema do "
                              "sistema\n" % e.message)
@@ -4391,6 +4398,8 @@ class Janela(Gtk.Window):
             self.gravar(SECAO_GERAL, "lateral",
                         "1" if self.bt_lateral.get_active() else "0")
             self.gravar(SECAO_GERAL, "tema", self.tema)
+            self.gravar(SECAO_GERAL, "fonte_grande",
+                        "1" if self.fonte_grande else "0")
         except Exception:
             pass
         if sys.platform == "win32":
@@ -4475,9 +4484,18 @@ class Janela(Gtk.Window):
         self.bt_log.connect("toggled", self._alternar_log)
 
         caixa_tema, self.botoes_tema = segmentado(
-            [("claro", "☾ Claro"), ("escuro", "☀ Escuro")],
-            self.tema, self._selecionar_tema, prefixo_classe="seg-topo")
+            NOMES_TEMA, self.tema, self._selecionar_tema,
+            prefixo_classe="seg-topo")
         acoes.pack_start(caixa_tema, False, False, 0)
+
+        self.bt_fonte = Gtk.ToggleButton(label="A+")
+        add_class(self.bt_fonte, "btn-topo")
+        self.bt_fonte.set_valign(Gtk.Align.CENTER)
+        self.bt_fonte.set_active(self.fonte_grande)
+        self.bt_fonte.set_tooltip_text("Fonte maior (1.5×)")
+        self.bt_fonte.connect("toggled", self._alternar_fonte)
+        acoes.pack_start(self.bt_fonte, False, False, 0)
+
         for texto, dica, fn in (
                 ("✎ snippets", "Biblioteca de comandos para execução em lote",
                  self.abrir_snippets),
@@ -4600,6 +4618,12 @@ class Janela(Gtk.Window):
                                         rgba(self.cor("term_bg")), None)
                 except Exception:
                     pass
+
+    def _alternar_fonte(self, bt):
+        self.fonte_grande = bt.get_active()
+        self._aplicar_css()
+        self.gravar(SECAO_GERAL, "fonte_grande",
+                    "1" if self.fonte_grande else "0")
 
     # -------------------------------------------------- lateral
     def _lateral(self):
@@ -7150,7 +7174,7 @@ def main():
 
     # o dialogo do cofre e a PRIMEIRA janela a aparecer; sem a folha de
     # estilo instalada aqui, ele sairia com o tema do sistema
-    instalar_css_cedo(ler_tema(caminho))
+    instalar_css_cedo(ler_tema(caminho), ler_fonte_grande(caminho))
 
     # COFRE ANTES DE CARREGAR: carregar() decifra os campos sigilosos
     # usando o cofre global, entao ele precisa estar aberto aqui. Sem
