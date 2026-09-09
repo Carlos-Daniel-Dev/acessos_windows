@@ -264,11 +264,12 @@ cima da base nova do Linux, um ponto de cada vez.
   `escrever_ini()` (ponto único, atômico, com `fsync`+`os.replace` e uma
   guarda que aborta a escrita se a seção `[cofre]` seria perdida), e
   guarda até 20 cópias anteriores em `historico/`.
-- **Reset do cofre ("esqueci a senha mestra")** — digitar `REINICIALIZAR`
-  no campo de senha mestra oferece recomeçar o cofre do zero (com
-  confirmação de 5 segundos), apagando os campos cifrados das conexões
-  (ficariam lixo indecifrável com a chave antiga) e preservando o arquivo
-  anterior em `historico/`.
+- ~~Reset do cofre ("esqueci a senha mestra")~~ — **removido em
+  2026-09-09**, antes de qualquer teste de ponta a ponta (decisão
+  explícita: aceitar o risco de "perdeu a senha mestra, perdeu as senhas
+  guardadas" em vez de manter um caminho de reset). Perder a senha mestra
+  hoje significa apagar a seção `[cofre]` do `conexoes.ini` na mão e
+  recadastrar as senhas do zero — sem atalho embutido no app.
 - **`[geral] caminho=`** — permite relocar `conexoes.ini`/`snippets.ini`/
   `historico/` pra outra pasta (ex.: uma pasta sincronizada), com uma tela
   nova em Ajustes (`_abrir_ajustes`) que usa `Gtk.FileChooserDialog`.
@@ -310,9 +311,10 @@ aparecendo corretamente.
 
 **Não testado ainda de ponta a ponta** (fica para a próxima rodada, antes
 de qualquer release "1.0.0 stable" — decisão explícita de lançar mais
-versões `0.x` primeiro): reset do cofre contra um cofre de verdade,
-relocação de pasta de dados, indicador de vida contra máquinas reais
-ligadas/desligadas, execução em lote contra um parque de verdade.
+versões `0.x` primeiro): relocação de pasta de dados. Indicador de vida
+(ping) e execução em lote foram considerados cobertos — lógica idêntica
+à já testada na versão Linux, sem alteração no porte. Reset do cofre
+saiu do escopo (ver seção própria abaixo).
 
 ## Ajustes de 2026-09-09 (mesmo dia) — fonte grande e tema Rosé
 
@@ -450,3 +452,30 @@ Dois ajustes no rodapé, pedidos depois de reparar que o chip de
   `[geral]` no `conexoes.ini` pra não voltar sozinho a cada arranque. Uma
   versão MAIS NOVA que a dispensada some por conta própria da comparação
   em `_ao_verificar_atualizacao` — não precisa "reabrir" nada na mão.
+
+## Rodapé nunca aparecia + reset do cofre removido (2026-09-09)
+
+Testando o rodapé acima ao vivo (automação de mouse/teclado contra um
+`conexoes.ini` isolado, não o de produção), nenhum dos rótulos
+permanentes (caminho do INI, versão, contagem de máquinas) aparecia —
+bug **anterior** a esta sessão, não introduzido pelas mudanças de hoje.
+
+Causa: `self.rodape` tem `set_no_show_all(True)` (pra sumir/aparecer ao
+trocar de aba), o que bloqueia o `show_all()` geral da janela de
+alcançar os FILHOS dele — sem um `.show()` próprio, nenhum rótulo
+permanente nasce visível. O chip/botão de atualização escapavam do bug
+porque são ligados via `set_visible()` direto na lógica de checagem,
+que não depende desse cascade. Corrigido em `_rodape()`: os três
+rótulos permanentes (caminho, versão, contagem) são mostrados na mão,
+uma vez, na construção — os três condicionais (chip, botão "Atualizar
+agora", "×") continuam de fora, cada um se revela sozinho quando há
+motivo.
+
+Também **removido nesta sessão**: o reset do cofre (`REINICIALIZAR` no
+campo de senha mestra). Decisão do usuário, antes de qualquer teste de
+ponta a ponta — risco aceito explicitamente para uso interno da
+equipe: perder a senha mestra hoje significa apagar a seção `[cofre]`
+do `conexoes.ini` na mão e recadastrar as senhas do zero, sem atalho
+embutido no app. `PALAVRA_RESET`, `_limpar_sigilosos()`,
+`_confirmar_reset()` e o ramo `"reiniciar"` de `destrancar()` saíram de
+`cofre.py`.

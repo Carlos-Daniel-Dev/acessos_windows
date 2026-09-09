@@ -398,9 +398,6 @@ def dialogo_trocar(cofre_atual, pai=None):
         return a
 
 
-PALAVRA_RESET = "REINICIALIZAR"
-
-
 def _do_app(nome):
     """Pega uma funcao do app que esta RODANDO.
 
@@ -416,41 +413,6 @@ def _do_app(nome):
     raise ErroCofre("função %s indisponível (app não carregado)" % nome)
 
 
-def _limpar_sigilosos(caminho, cp):
-    """Esvazia os campos de senha de todas as secoes de conexao.
-
-    Chamado so na reinicializacao: o que estava cifrado com a chave antiga
-    virou lixo indecifravel, e deixar isso no arquivo so serve para alguem
-    tentar quebrar depois.
-    """
-    _gs = _do_app("gravar_secao")
-    for secao in cp.sections():
-        if secao == SECAO_COFRE:
-            continue
-        pares = [(campo, "") for campo in CAMPOS_SIGILOSOS
-                 if cp[secao].get(campo)]
-        if pares:
-            _gs(caminho, secao, pares)
-
-
-def _confirmar_reset(pai):
-    """Confirmacao explicita, cronometrada, com o custo escrito por extenso.
-
-    Cinco segundos, nao tres: o que se perde aqui sao todas as senhas
-    guardadas e nao ha desfazer. O tempo existe para quebrar o automatismo
-    de quem ja esta com a mao no Enter.
-    """
-    import dialogo_ui
-    return dialogo_ui.confirmar(
-        pai, "Reinicializar o cofre?",
-        "Todas as senhas guardadas serão APAGADAS e um cofre novo será "
-        "criado com a senha que você definir a seguir.\n\n"
-        "As conexões e os dados de acesso continuam; apenas as senhas se "
-        "perdem. Uma cópia do conexoes.ini é guardada em historico/ antes "
-        "da alteração.",
-        ok="Apagar e recriar", perigo=True, contagem=5)
-
-
 def dialogo_abrir(cofre, pai=None):
     """Pede a senha mestra. Devolve 'ok', 'trocar' ou None (cancelou).
 
@@ -463,11 +425,6 @@ def dialogo_abrir(cofre, pai=None):
     botao_dialogo(dlg, "Abrir", Gtk.ResponseType.OK, "acao")
 
     # AJUDA no "?" da barra de titulo, ao lado do fechar.
-    #
-    # A reinicializacao NAO tem botao aqui de proposito: um botao ao lado
-    # do campo de senha e o botao que se ve depois de errar a senha tres
-    # vezes — o pior momento possivel para oferecer "apagar tudo". Fica
-    # atras de uma palavra digitada, que exige intencao e conhecimento.
     try:
         hb = dlg.get_titlebar()
         if hb is not None:
@@ -478,12 +435,11 @@ def dialogo_abrir(cofre, pai=None):
                 dlg,
                 "As senhas guardadas são cifradas com a senha mestra e o "
                 "sal gravado na seção [cofre] do conexoes.ini.\n\n"
-                "Perdeu a senha mestra? Digite REINICIALIZAR no campo de "
-                "senha e confirme. Isso cria um cofre novo e APAGA todas "
-                "as senhas guardadas — as conexões continuam, só as senhas "
-                "se perdem.\n\n"
-                "Uma cópia do arquivo é guardada em historico/ antes de "
-                "qualquer alteração.",
+                "Não há recuperação: perdida a senha mestra, as senhas "
+                "guardadas ficam inacessíveis permanentemente (as conexões "
+                "em si continuam, só as senhas se perdem). A única saída "
+                "é apagar a seção [cofre] do conexoes.ini na mão e "
+                "recadastrar as senhas do zero.",
                 titulo="Sobre o cofre"))
             hb.pack_end(bt_ajuda)
             bt_ajuda.show()
@@ -504,13 +460,6 @@ def dialogo_abrir(cofre, pai=None):
         if resp != Gtk.ResponseType.OK:
             dlg.destroy()
             return None
-        if ent.get_text().strip() == PALAVRA_RESET:
-            if _confirmar_reset(dlg):
-                dlg.destroy()
-                return "reiniciar"
-            ent.set_text("")
-            ent.grab_focus()
-            continue
         try:
             cofre.abrir(ent.get_text())
         except SenhaIncorreta:
@@ -614,27 +563,6 @@ def destrancar(caminho, pai=None):
                 return None, False
             if r == "ok":
                 return c, True
-            if r == "reiniciar":
-                # cofre novo do zero: as senhas antigas ficam no arquivo
-                # cifradas com a chave velha e nao abrem mais, entao sao
-                # limpas junto — deixa-las seria lixo indecifravel.
-                senha = dialogo_criar(pai)
-                if senha is None:
-                    continue
-                c2 = Cofre()
-                c2.criar(senha)
-                try:
-                    _limpar_sigilosos(caminho, cp)
-                    _do_app("gravar_secao")(
-                        caminho, SECAO_COFRE,
-                        list(c2.parametros().items()))
-                except Exception as e:
-                    _erro(pai, "Falha ao reinicializar: %s" % e)
-                    continue
-                _aviso(pai, "Cofre reinicializado. As senhas anteriores "
-                            "foram apagadas.\nO arquivo anterior está em "
-                            "historico/.")
-                return c2, True
             # trocar senha, direto da primeira janela
             nova = dialogo_trocar(c, pai)
             if nova is None:
