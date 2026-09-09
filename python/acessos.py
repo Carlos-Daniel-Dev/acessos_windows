@@ -5849,9 +5849,20 @@ class Janela(Gtk.Window):
         self.rodape.set_visible(True)
 
     def _rodape(self):
+        # cx tem set_no_show_all(True) (ver _montar) porque some/aparece
+        # inteiro ao trocar de aba — mas isso tambem bloqueia o show_all()
+        # GERAL da janela de alcancar os FILHOS dele (mesma armadilha que
+        # revelar() documenta). Sem mostrar cada filho permanente na mao
+        # AQUI, uma vez so, nenhum deles nasce visivel — o rotulo do
+        # caminho, a versao e a contagem ficavam SEMPRE invisiveis desde
+        # que este rodape existe, e ninguem notou porque o chip/botao de
+        # atualizacao (escondidos por padrao de proposito) sao ligados
+        # via set_visible() direto, que nao depende desse cascade —
+        # descoberto testando ao vivo em 2026-09-09.
         cx = Gtk.Box(spacing=8)
         cx.set_border_width(5)
-        cx.pack_start(rotulo(self.caminho, "rodape-info"), True, True, 0)
+        lb_caminho = rotulo(self.caminho, "rodape-info")
+        cx.pack_start(lb_caminho, True, True, 0)
         # versao instalada: SEMPRE visivel, tenha ou nao rede/atualizacao —
         # antes so se sabia a versao rodando abrindo o manifesto.json na
         # mao. Ao contrario do chip abaixo, este rotulo nunca some.
@@ -5886,6 +5897,11 @@ class Janela(Gtk.Window):
         self.lb_conta = rotulo("%d máquinas" % len(self.conexoes),
                                "rodape-info", xalign=1.0)
         cx.pack_end(self.lb_conta, False, False, 0)
+        # os permanentes, na mao, uma vez so — os tres condicionais acima
+        # ficam de fora de proposito (cada um se mostra sozinho quando tem
+        # motivo, via set_visible() direto na sua propria logica)
+        for permanente in (lb_caminho, self.lb_versao, self.lb_conta):
+            permanente.show()
         return cx
 
     def _iniciar_checagem_atualizacao(self):

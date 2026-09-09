@@ -654,3 +654,35 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
    qualquer "1.0.0 stable"** — reset do cofre, relocação de pasta,
    indicador de vida e execução em lote ainda precisam de teste de ponta a
    ponta contra dados/máquinas de verdade.
+7. **Item 7 — teste real de cofre/relocação e dois achados (2026-09-09,
+   mesmo dia)**. Rodando o app de fonte contra um `conexoes.ini` isolado
+   (fora do `~/.config/acessos` real, com automação de mouse/teclado via
+   PowerShell), testado o fluxo de criação de cofre ("Proteger senhas")
+   de ponta a ponta: 2 senhas em texto claro corretamente migradas para
+   `enc:v1:...`, seção `[cofre]` gravada certa. Dois achados reais no
+   caminho:
+   - **Bug real, não relacionado ao teste em si**: `self.rodape` (a barra
+     no rodapé com caminho do INI, versão instalada e contagem de
+     máquinas) nunca aparecia — nem antes desta sessão, nem depois do PR
+     do "versão sempre visível". Causa: o container tem
+     `set_no_show_all(True)` (pra sumir/aparecer ao trocar de aba), e
+     isso bloqueia o `show_all()` GERAL da janela de alcançar os FILHOS
+     dele — os rótulos permanentes (caminho, versão, contagem) nunca
+     recebiam seu próprio `.show()`, só o chip/botão de atualização
+     funcionavam (esses são ligados via `set_visible()` direto na lógica
+     de checagem, não dependem do cascade). Corrigido em `_rodape()`:
+     os três rótulos permanentes são mostrados na mão, uma vez, na
+     construção — os três condicionais (chip, botão, "×") continuam de
+     fora desse show manual, cada um se revela sozinho quando há motivo.
+   - **Decisão do usuário: reset do cofre (`REINICIALIZAR`) removido**,
+     não só adiado — `PALAVRA_RESET`, `_limpar_sigilosos()`,
+     `_confirmar_reset()` e o ramo `"reiniciar"` de `destrancar()`
+     tirados de `cofre.py`; o texto de ajuda do diálogo de senha mestra
+     atualizado pra deixar claro que não há recuperação. Risco aceito
+     explicitamente para uso interno da equipe: perder a senha mestra
+     agora significa apagar a seção `[cofre]` do `conexoes.ini` na mão e
+     recadastrar as senhas do zero.
+   - **Pendência restante pra 1.0.0**: só relocação de pasta
+     (`[geral] caminho=`) ainda não testada contra dados de verdade —
+     indicador de vida e execução em lote foram considerados cobertos
+     (lógica idêntica à já testada no Linux, porte sem alteração).
