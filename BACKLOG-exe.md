@@ -558,18 +558,22 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
         cogitava antes da decisão de repositório público; ok pra 8 pessoas
         checando ocasionalmente, mas vale não checar com muita frequência);
         a parte de baixar e aplicar os arquivos mudados de verdade.
-  - [ ] **PENDENTE (achado em 2026-09-08, decidido adiar)**: depois de
-        aplicar a atualização e reiniciar, o chip "atualização disponível"
-        continua aparecendo, e clicar em "Atualizar agora" de novo só
-        confirma que já está tudo em dia. Causa: `manifesto.json` instalado
-        NÃO está na lista `copiar` do próprio manifesto (é o arquivo que
-        compara, não um dos comparados) — `aplicar_atualizacao()` nunca o
-        sobrescreve, então `versao_local()` continua lendo a versão antiga
-        pra sempre. Fix (pra próxima rodada): depois de aplicar com
-        sucesso, gravar a `versao`/`gerado_em` do manifesto remoto por
-        cima do manifesto local (ou baixar o `manifesto.json` do próprio
-        Release junto dos outros arquivos) — só então esconder o chip até
-        a próxima checagem encontrar uma versão realmente mais nova.
+  - [x] **Corrigido em 2026-09-09**: depois de aplicar a atualização e
+        reiniciar, o chip "atualização disponível" continuava aparecendo,
+        e clicar em "Atualizar agora" de novo só confirmava que já estava
+        tudo em dia. Causa: `manifesto.json` instalado NÃO estava na lista
+        `copiar` do próprio manifesto (é o arquivo que compara, não um dos
+        comparados) — `aplicar_atualizacao()` nunca o sobrescrevia, então
+        `versao_local()` continuava lendo a versão antiga pra sempre.
+        Fix: `_gravar_manifesto_local()` em `atualizador.py` — sempre que
+        `aplicar_atualizacao()` termina SEM nenhuma falha (mesmo que não
+        houvesse arquivo "copiar" pra baixar, só "compilar"), o
+        `manifesto.json` local é sobrescrito pelo remoto recém-aplicado.
+        Best-effort (não vira "falha ao atualizar" se essa gravação
+        falhar — os arquivos de verdade já foram trocados com sucesso,
+        isso aqui é só o que o chip lê depois). Com uma falha (atualização
+        parcial), o manifesto local NÃO é tocado de propósito — o chip
+        deve continuar avisando até uma tentativa sem falhas.
   - [x] **Teste real de ponta a ponta contra a Release v0.2.2, 2026-09-08**:
         rodando o build antigo (v0.2.1) de verdade, clicando nos botões via
         automação de mouse (diálogos do GTK são modais) — a checagem e o

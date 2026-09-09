@@ -208,6 +208,24 @@ def listar_diferencas(manifesto_remoto):
     return diferencas
 
 
+def _gravar_manifesto_local(manifesto_remoto):
+    """Sobrescreve o manifesto.json instalado pelo remoto recém-aplicado —
+    SÓ chamado depois de uma aplicação sem nenhuma falha (ver
+    aplicar_atualizacao()). Sem isso, versao_local() continuaria lendo a
+    versão antiga pra sempre, e o chip "atualização disponível" nunca
+    sumiria mesmo com tudo já atualizado (achado no teste de ponta a
+    ponta de 2026-09-08, ver BACKLOG-exe.md, Item 5). Best-effort: se
+    falhar em gravar, só loga silenciosamente pro chamador (via retorno
+    None) — os arquivos já foram trocados com sucesso, isso aqui é
+    cosmético (o chip), não deve virar "falha ao atualizar"."""
+    try:
+        with open(_caminho_manifesto_local(), "w", encoding="utf-8") as f:
+            json.dump(manifesto_remoto, f, ensure_ascii=False, indent=4)
+        return True
+    except Exception:
+        return False
+
+
 def aplicar_atualizacao(manifesto_remoto, tag):
     """Baixa e sobrescreve, um por um, os arquivos soltos que mudaram.
     Roda de forma SÍNCRONA (bloqueante) — chamar via aplicar_async() de
@@ -220,7 +238,13 @@ def aplicar_atualizacao(manifesto_remoto, tag):
     quebrado no bundle. O arquivo antigo vai para `_NOME_BACKUP` antes de
     ser substituído, um nível só (não é histórico, é rede de segurança
     pro patch mais recente — mesma filosofia do `.backup_anterior` que
-    `atualizar.ps1` já usa)."""
+    `atualizar.ps1` já usa).
+
+    Sem NENHUMA falha (mesmo que não houvesse nada pra aplicar — versão
+    nova sem mudança nos arquivos "copiar", só no "compilar" por
+    exemplo), o manifesto.json local é sobrescrito pelo remoto — é o que
+    faz versao_local() acompanhar a versão de verdade e o chip de
+    atualização sumir depois de aplicado."""
     base = _pasta_base()
     diferencas = listar_diferencas(manifesto_remoto)
     aplicados, falhas = [], []
@@ -256,6 +280,9 @@ def aplicar_atualizacao(manifesto_remoto, tag):
             aplicados.append(nome_local)
         except Exception as e:
             falhas.append((nome_local, "falha ao gravar: %s" % e))
+
+    if not falhas:
+        _gravar_manifesto_local(manifesto_remoto)
 
     return {"aplicados": aplicados, "falhas": falhas}
 
