@@ -682,7 +682,22 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
      explicitamente para uso interno da equipe: perder a senha mestra
      agora significa apagar a seção `[cofre]` do `conexoes.ini` na mão e
      recadastrar as senhas do zero.
-   - **Pendência restante pra 1.0.0**: só relocação de pasta
-     (`[geral] caminho=`) ainda não testada contra dados de verdade —
-     indicador de vida e execução em lote foram considerados cobertos
-     (lógica idêntica à já testada no Linux, porte sem alteração).
+   - **Relocação de pasta (`[geral] caminho=`) testada de ponta a ponta,
+     mesma sessão**: via Ajustes → "LOCAL DOS ARQUIVOS" → "Escolher
+     pasta...", apontado para uma pasta vazia isolada (variável de
+     ambiente `XDG_CONFIG_HOME` própria, nada tocado no
+     `~/.config/acessos` real). Confirmado em disco: `conexoes.ini`
+     copiado pra pasta nova, chave `caminho=` gravada no INI padrão.
+     Reiniciado o processo (mesmo `XDG_CONFIG_HOME`): `caminho_conf()`
+     seguiu o ponteiro sozinho, o painel passou a mostrar o nome da
+     pasta nova ("pasta_relocada_teste") e o caminho completo no
+     rodapé, e o cofre destrancou com a MESMA senha mestra (salt e
+     verificador migraram corretos) — as 2 conexões de teste
+     continuaram visíveis e intactas.
+   - **Todas as 4 pendências de 1.0.0 fechadas nesta sessão**: reset do
+     cofre saiu de escopo (removido), indicador de vida e execução em
+     lote considerados cobertos (lógica idêntica ao Linux), relocação
+     de pasta testada de ponta a ponta acima. Sem pendência de teste
+     conhecida barrando 1.0.0 — falta só decidir quando de fato
+     lançar (ver Item 2: assinatura de código e canal de distribuição
+     interno continuam adiados, não são bloqueio técnico).

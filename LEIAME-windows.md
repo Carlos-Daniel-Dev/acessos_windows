@@ -309,12 +309,16 @@ módulos do projeto, não compactados no `PYZ`) — os dois sobem sem erro,
 com o seletor de tema, a barra de execução em lote e os glifos
 aparecendo corretamente.
 
-**Não testado ainda de ponta a ponta** (fica para a próxima rodada, antes
-de qualquer release "1.0.0 stable" — decisão explícita de lançar mais
-versões `0.x` primeiro): relocação de pasta de dados. Indicador de vida
-(ping) e execução em lote foram considerados cobertos — lógica idêntica
-à já testada na versão Linux, sem alteração no porte. Reset do cofre
-saiu do escopo (ver seção própria abaixo).
+**Atualização (mesmo dia, mais tarde)**: relocação de pasta de dados
+testada de ponta a ponta (Ajustes → "LOCAL DOS ARQUIVOS", contra um
+`XDG_CONFIG_HOME` isolado — nada tocado no `~/.config/acessos` real).
+Confirmado: `conexoes.ini` copiado pra pasta nova, `caminho=` gravado
+no INI padrão, e reiniciando o app o painel passou a carregar da pasta
+nova sozinho, com o cofre destrancando com a mesma senha mestra.
+Indicador de vida (ping) e execução em lote foram considerados
+cobertos — lógica idêntica à já testada na versão Linux, sem alteração
+no porte. Reset do cofre saiu do escopo (ver seção própria abaixo). Com
+isso, nenhuma das 4 pendências levantadas continua em aberto.
 
 ## Ajustes de 2026-09-09 (mesmo dia) — fonte grande e tema Rosé
 
