@@ -313,3 +313,78 @@ de qualquer release "1.0.0 stable" — decisão explícita de lançar mais
 versões `0.x` primeiro): reset do cofre contra um cofre de verdade,
 relocação de pasta de dados, indicador de vida contra máquinas reais
 ligadas/desligadas, execução em lote contra um parque de verdade.
+
+## Ajustes de 2026-09-09 (mesmo dia) — fonte grande e tema Rosé
+
+Depois do redesign do `tema.py`, duas coisas visíveis foram revisadas:
+
+- **Botão "A+" de volta** — a escala de fonte (`ESCALA_FONTE`/
+  `ESCALA_FONTE_GRANDE`/`ESCALA_GLIFO`/`_escalar_fontes()`) tinha sido
+  removida ao adotar o redesign do Linux (decisão de produto de lá, não
+  bug). Reimplementada em cima da folha NOVA: continua sendo um multiplicador
+  aplicado em cima do CSS já pronto (regex em cima de todo `font-size:
+  Npx`), então não depende da estrutura exata das regras — funciona
+  igual não importa quanto o `tema.py` mude depois. `ESCALA_FONTE` virou
+  `1.0` (a folha nova já veio com os tamanhos calibrados; não faz sentido
+  inflar 15% por cima de novo) e `ESCALA_GLIFO` ajustado pra `1.15`
+  (a escala de glifo antiga, 1.30, ficava exagerada nos ícones do
+  redesign novo).
+- **Seletor de tema virou 3 opções, com um tema novo** — `tema.py` ganhou
+  `NOMES_TEMA` (lista ordenada `[(chave, rótulo), ...]`) e um terceiro
+  tema, `"rose"` (❀ Rosé): paleta rosa/branco, mesma estrutura de
+  `"claro"` (vidro branco, titlebar clara). **Deliberadamente idênticos
+  a `"claro"`**: os tokens de protocolo (`azul`/`verde`/`roxo` e as
+  variantes `_fraco` — VNC/SSH/RDP), os status (`ok_*`/`erro_*`/
+  `atencao_*`) e a tela remota/terminal (`palco`/`term_bg`/`term_fg`) —
+  só o cromo (fundo, cartão, titlebar, vidro, botão de ação, banner)
+  mudou pra rosa. `acessos.py` usa `segmentado(NOMES_TEMA, ...)` no
+  lugar da lista fixa de 2 itens — um tema novo em `tema.py` aparece no
+  seletor sem tocar em `acessos.py` de novo.
+
+Testado rodando de fonte: os dois toggles (tema Rosé + A+) renderizam
+corretamente, com os glifos legíveis nos dois tamanhos.
+
+## Importador de CSV do RDM (mesmo dia, 2026-09-09)
+
+Novo módulo `python/importar_rdm.py` — traz máquinas de um export
+**"Export vault (.csv)"** do Devolutions Remote Desktop Manager pro
+`conexoes.ini`, acessível em **Ajustes → IMPORTAR**.
+
+Só o CSV é suportado (não `.rdm`/`.json`/`.html`/`.xml` — decisão
+deliberada: `.rdm` é formato proprietário que pode trazer um blob de
+credenciais cifrado com a chave do cofre deles, impossível de decifrar
+aqui; `.json`/`.xml` têm schema aninhado desconhecido sem um exemplo
+real pra confirmar contra; `.html` normalmente nem traz os campos
+técnicos). Testado com um export real de ~225 máquinas antes de integrar
+à UI.
+
+**Mapeamento**: `Host` → host · `Port` → decide o protocolo (5900 VNC,
+3389 RDP, 22 SSH, mesma tabela `PORTA_PROTO` de `acessos.py`) · `Display
+Name` → título do card (deduplicado com sufixo numerado se repetir) ·
+`Folder` → grupo, convertendo `\` em `;` (subgrupo do Acessos). Usuário e
+senha nunca vêm no export — ficam em branco, como uma conexão cadastrada
+à mão sem preencher o campo.
+
+**Dois bugs achados testando contra o export real, corrigidos antes de
+integrar**:
+- **Mojibake de codificação** — o export trazia "ç"/"ã" como "Ã§"/"Ã£"
+  (bytes UTF-8 decodificados como Windows-1252). `_corrigir_mojibake()`
+  desfaz isso quando detecta o padrão, sem mexer em arquivos que já
+  estão certos.
+- **`/` não é separador de subpasta** — só `\` é. Uma pasta do RDM
+  chamada "AD / ARQUIVOS / IMPRESSORAS / NAS" é UM nome só (usa "/" como
+  pontuação decorativa); dividir por "/" também quebraria isso em quatro
+  grupos errados. Confirmado contra o export: essa pasta hospeda AD,
+  impressoras e NAS juntos, de propósito.
+
+**Reimportar não duplica** — hosts já cadastrados no `conexoes.ini` são
+pulados (comparação por host, não por nome), então rodar a importação
+duas vezes com o mesmo arquivo é seguro.
+
+Testado de ponta a ponta pela UI de verdade (Ajustes → Importar CSV do
+RDM…, escolhendo o arquivo pelo `Gtk.FileChooserDialog`) contra o export
+real do parque: **224 máquinas importadas**, grupos e subgrupos
+aninhados corretamente na lateral (`01_Controle - Caixas` com 198
+máquinas em 7 subgrupos, batendo exatamente com a soma), acentuação
+correta ("Balanças"), e a reimportação do mesmo arquivo confirmada como
+no-op (0 novas, todas puladas por já existirem).

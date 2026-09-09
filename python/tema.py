@@ -93,7 +93,51 @@ TEMAS = {
         azul="#748ffc", azul_h="#91a7ff", verde="#38d9a9",
         hero1="#0b0e12", hero2="#1c2733", hero_txt="#ffffff",
     ),
+    # TEMA ROSÉ — mesma estrutura de "claro" (vidro branco, titlebar clara),
+    # só recolorido pra uma paleta rosa/branco. PROPOSITALMENTE mantém
+    # idênticos os tokens SEMÂNTICOS de "claro" — azul/verde/roxo (+ as
+    # variantes "_fraco") são a cor de cada protocolo (VNC/SSH/RDP) em
+    # QUALQUER tema, ok_bg/ok_fg/erro_*/atencao_* são status universais, e
+    # palco/term_bg/term_fg são a tela remota/terminal, que fica escura
+    # nos três temas de proposito. Só o CROMO (fundo, cartão, titlebar,
+    # vidro, botão de ação, banner) muda — é o que dá a identidade rosé
+    # sem arriscar a legibilidade dos indicadores que o resto do app
+    # depende (o roxo do RDP continua roxo, não vira rosa e some no meio
+    # do resto rosa).
+    "rose": dict(
+        fundo="#fbeef3", cartao="#ffffff", borda="#f3dbe4", borda2="#e6bed0",
+        texto="#3d2530", sec="#8c6472", fraco="#b899a6",
+        fundo1="#fdf3f6", fundo2="#fbeef3", fundo3="#f3dce6",
+        roxo="#6b40d0", azul_fraco="rgba(76,110,245,0.13)",
+        verde_fraco="rgba(12,166,120,0.13)", roxo_fraco="rgba(107,64,208,0.13)",
+        luz1="rgba(214,92,148,0.10)", luz2="rgba(230,180,140,0.07)",
+        vidro1="rgba(255,255,255,0.72)", vidro2="rgba(255,255,255,0.87)",
+        vidro3="rgba(255,255,255,1.00)", luz_b="rgba(61,37,48,0.11)",
+        barra="rgba(251,238,243,0.86)",
+        hero_luz1="rgba(214,92,148,0.30)", hero_luz2="rgba(230,180,140,0.20)",
+        topo1="#fdf1f5", topo2="#f6dfe8",
+        topo_txt="#3d2530", topo_sec="#8c6472",
+        vidro="rgba(61,37,48,0.05)", vidro_h="rgba(61,37,48,0.11)",
+        vidro_b="rgba(61,37,48,0.12)",
+        palco="#0b0f14", term_bg="#0d1117", term_fg="#d7dee6",
+        sel="#3d2530", sel_txt="#ffffff",
+        hover="#f7e2ea", campo="#ffffff",
+        ok_bg="#dcf5ec", ok_fg="#0b7a63",
+        erro_bg="#fde4e4", erro_fg="#b02a37", erro_h="#8d1f2a",
+        neutro_bg="#f5e6ec", neutro_fg="#7d5c67",
+        atencao_bg="#fdf1d8", atencao_fg="#8a5a00",
+        acao="#c2477e", acao_txt="#ffffff", acao_hover="#a83a6b",
+        azul="#4c6ef5", azul_h="#3b5bdb", verde="#0ca678",
+        hero1="#2b1420", hero2="#5c2540", hero_txt="#ffffff",
+    ),
 }
+
+# nomes exibidos no seletor de tema — chave TEMAS, rotulo curto com glifo
+NOMES_TEMA = [
+    ("claro", "☾ Claro"),
+    ("escuro", "☀ Escuro"),
+    ("rose", "❀ Rosé"),
+]
 
 # ---------------------------------------------------------------------
 # FONTES DE SIMBOLO — por que esta lista existe
@@ -125,6 +169,26 @@ MONO = '"IBM Plex Mono", "Consolas", "DejaVu Sans Mono", monospace, ' + SIMBOLOS
 SANS = '"IBM Plex Sans", "Inter", "Cantarell", sans-serif, ' + SIMBOLOS
 COND = ('"IBM Plex Sans Condensed", "IBM Plex Sans", "Cantarell", '
         'sans-serif, ' + SIMBOLOS)
+
+# ---------------------------------------------------------------------
+# ESCALA DE FONTE — o botão "A+" da titlebar
+#
+# Não é aplicada regra por regra: gerar_css() multiplica TODO
+# "font-size: Npx" da folha no fim (ver _escalar_fontes()). Assim não há
+# risco de esquecer uma regra e ficar com dois tamanhos brigando — é por
+# isso que virou fator, e não dezenas de números editados à mão.
+#
+# ESCALA_FONTE  1.0 = tamanhos originais do CSS_MOLDE abaixo.
+# ESCALA_FONTE_GRANDE  multiplicador extra quando o usuário liga "A+"
+#               (bt_fonte, em acessos.py). 1.5 = mais 50% em cima do
+#               tamanho padrão, não em cima do valor original do CSS.
+# ESCALA_GLIFO  vale só pros botões-glifo (.tog-glifo/.btn-janela), cujo
+#               "ícone" é um caractere de texto — crescer a fonte E
+#               crescer o ícone. Multiplica em cima da escala efetiva.
+# ---------------------------------------------------------------------
+ESCALA_FONTE = 1.0
+ESCALA_FONTE_GRANDE = 1.5
+ESCALA_GLIFO = 1.15
 
 CSS_MOLDE = """
 /* ---------------- fundo com luz ----------------
@@ -1070,9 +1134,75 @@ headerbar.dlg-topo button.perigo label,
 .acessos-dialogo button:not(.acao):not(.perigo) label    { color: %(texto)s; }
 """
 
-def gerar_css(tema):
-    """Folha pronta para o CssProvider, já com as cores do tema."""
-    return (CSS_MOLDE % TEMAS[tema]).encode()
+def _escalar_fontes(css, escala_fonte=ESCALA_FONTE):
+    """Multiplica todo 'font-size: Npx' da folha pelas escalas.
+
+    Feito no texto final, e não em cada regra, para que nenhuma passe
+    batida. As regras de glifo (.tog-glifo, .btn-janela) levam o fator
+    extra, porque nelas o "ícone" é um caractere de texto — crescer a
+    fonte É crescer o ícone.
+
+    `escala_fonte` é a escala já efetiva (ESCALA_FONTE sozinha, ou
+    multiplicada por ESCALA_FONTE_GRANDE quando o usuário pede fonte
+    maior) — quem decide isso é gerar_css(), esta função só aplica.
+    """
+    import re
+
+    classes_glifo = (".tog-glifo", ".btn-janela")
+
+    def escala_da_linha(trecho_antes):
+        # olha o ultimo seletor aberto antes desta propriedade
+        corte = trecho_antes.rfind("}")
+        seletor = trecho_antes[corte + 1:]
+        if any(c in seletor for c in classes_glifo):
+            return escala_fonte * ESCALA_GLIFO
+        return escala_fonte
+
+    saida = []
+    pos = 0
+    for m in re.finditer(r"font-size:\s*(\d+(?:\.\d+)?)px", css):
+        fator = escala_da_linha(css[:m.start()])
+        novo = max(1, int(round(float(m.group(1)) * fator)))
+        saida.append(css[pos:m.start()])
+        saida.append("font-size: %dpx" % novo)
+        pos = m.end()
+    saida.append(css[pos:])
+    css = "".join(saida)
+
+    # A caixa dos botões de glifo cresce junto com o caractere. Acha o
+    # PRIMEIRO "padding: Npx Mpx" dentro do bloco de cada classe (não um
+    # valor fixo hardcoded — a folha muda, os valores exatos também) e
+    # reescala os dois números. Editar o padding QUE JÁ EXISTE, e não
+    # inserir um segundo: na cascata do CSS a última declaração da mesma
+    # propriedade vence, e a antiga anularia a nova.
+    if ESCALA_GLIFO != 1.0:
+        def _escalar_padding_do_bloco(m):
+            bloco = m.group(0)
+
+            def _pad(pm):
+                a, b = int(pm.group(1)), int(pm.group(2))
+                return "padding: %dpx %dpx" % (
+                    max(a, int(round(a * ESCALA_GLIFO))),
+                    max(b, int(round(b * ESCALA_GLIFO))))
+
+            return re.sub(r"padding:\s*(\d+)px\s+(\d+)px", _pad, bloco,
+                          count=1)
+
+        for classe in classes_glifo:
+            padrao = re.escape(classe) + r"\s*\{[^}]*\}"
+            css = re.sub(padrao, _escalar_padding_do_bloco, css, count=1)
+    return css
+
+
+def gerar_css(tema, fonte_grande=False):
+    """Folha pronta para o CssProvider, já com as cores do tema.
+
+    `fonte_grande=True` aplica ESCALA_FONTE_GRANDE (1.5x) em cima do
+    tamanho padrão (ESCALA_FONTE) — é a opção que o botão "A+" da
+    titlebar liga/desliga em acessos.py.
+    """
+    escala = ESCALA_FONTE * (ESCALA_FONTE_GRANDE if fonte_grande else 1.0)
+    return _escalar_fontes(CSS_MOLDE % TEMAS[tema], escala).encode()
 
 
 def rgba(h):
