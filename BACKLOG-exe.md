@@ -701,3 +701,12 @@ typelib `GdkWin32` que o Item abaixo descobriu estar faltando):
      conhecida barrando 1.0.0 — falta só decidir quando de fato
      lançar (ver Item 2: assinatura de código e canal de distribuição
      interno continuam adiados, não são bloqueio técnico).
+
+## 🎉 1.0.0 stable — lançada em 2026-09-09
+
+`manifesto.json` regerado pra `1.0.0` (`gerar_manifesto.ps1 -Versao
+1.0.0`). Executável/instalador desta versão gerados e publicados pelo
+usuário (`compilar_exe.ps1`/`publicar.ps1`), fora desta sessão. Marca o
+fim do backlog de empacotamento (Itens 1-5) e do porte das atualizações
+do Linux (Item 6) com as 4 pendências de teste do Item 7 fechadas —
+próximas mudanças entram como releases `1.x` normais.
