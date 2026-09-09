@@ -25,10 +25,27 @@ USO
     --wayland  forca Wayland nativo: captura de teclado, RDP em janela
     (o padrao vem de `x11` em [geral]; hoje 1)
 
-ARQUIVOS   (em ~/.config/acessos/)
+ARQUIVOS   (em ~/.config/acessos/, ou onde [geral] caminho= apontar)
     conexoes.ini   uma secao por maquina, com tela + shell + rdp juntos.
                    Subgrupos com ";" no campo `grupo`.
     snippets.ini   biblioteca de comandos da execucao em lote.
+    historico/     as 20 ultimas versoes do conexoes.ini, com index.txt
+                   dizendo o que mudou em cada uma.
+
+    ONDE FICAM: por padrao ~/.config/acessos/. Para mover tudo (util para
+    deixar numa pasta sincronizada), ponha no INI padrao:
+
+        [geral]
+        caminho = /home/voce/Drive/acessos
+
+    O arquivo do lugar padrao passa a funcionar como PONTEIRO: o app le
+    essa chave e usa o conexoes.ini daquele diretorio, com snippets e
+    historico junto. Um unico salto e seguido — dois arquivos apontando um
+    para o outro nao entram em laco. `--conf` vence o caminho= sempre.
+
+    A secao [cofre] guarda salt/kdf/verificador. SEM ELA nenhuma senha
+    guardada abre, mesmo com a senha mestra certa: a chave e derivada da
+    senha MAIS o salt. Uma gravacao que a removeria e abortada.
 
     O INI e reescrito LINHA A LINHA, preservando comentarios e ordem —
     nunca com configparser.write(), que comeria os dois. Sao gravados de
@@ -347,8 +364,7 @@ LARG_MIN_LATERAL = 180
 # linhas de CSS no meio do codigo. Reexportamos os nomes para o resto do
 # arquivo (e para sftp.py, cofre.py e ssh.py) continuar usando como antes.
 from tema import (ACENTOS, TEMAS, MONO, SANS, COND,   # noqa: E402,F401
-                  CSS_MOLDE, gerar_css, rgba, fonte_mono,
-                  ESCALA_FONTE, ESCALA_GLIFO)
+                  CSS_MOLDE, gerar_css, rgba, fonte_mono)
 
 
 
@@ -616,6 +632,219 @@ def regua(cor, altura=2):
     return pintar(add_class(r, "regua"), cor)
 
 
+ICONES_ABA = {
+    "vnc":   ("video-display-symbolic", "computer-symbolic", "VNC"),
+    "ssh":   ("utilities-terminal-symbolic", "terminal-symbolic", "SSH"),
+    "rdp":   ("preferences-desktop-remote-desktop-symbolic",
+              "network-server-symbolic", "RDP"),
+    "sftp":  ("folder-symbolic", "folder", "SFTP"),
+    "massa": ("view-list-symbolic", "format-justify-fill-symbolic", "LOTE"),
+}
+
+
+def selo_protocolo(tipo):
+    """Icone do protocolo, com o texto antigo como ultimo recurso.
+
+    O mesmo glifo aparece no card e na aba: e o que faz a aba ser
+    reconhecida em vez de lida. Se o tema de icones nao tiver nenhum dos
+    nomes, cai no rotulo de texto de antes — degradar para o comportamento
+    velho e melhor que aba sem identificacao nenhuma."""
+    nomes = ICONES_ABA.get(tipo)
+    if nomes:
+        tema_ic = Gtk.IconTheme.get_default()
+        for nome in nomes[:-1]:
+            try:
+                if tema_ic.has_icon(nome):
+                    img = Gtk.Image.new_from_icon_name(nome,
+                                                       Gtk.IconSize.MENU)
+                    # pixel_size FIXO e valign CENTER: icones simbolicos tem
+                    # proporcoes diferentes entre si (o de lista e mais baixo
+                    # que o de monitor) e, sem fixar, um deles desalinhava a
+                    # aba inteira em relacao as vizinhas
+                    img.set_pixel_size(12)
+                    img.set_valign(Gtk.Align.CENTER)
+                    img.set_halign(Gtk.Align.CENTER)
+                    return add_class(img, "aba-tipo", "aba-" + tipo)
+            except Exception:
+                continue
+        texto = nomes[-1]
+    else:
+        texto = tipo.upper()
+    lb = Gtk.Label(label=texto)
+    lb.set_valign(Gtk.Align.CENTER)
+    return add_class(lb, "aba-tipo", "aba-" + tipo)
+
+
+_PING_DIAG = {"feito": False}
+
+
+def pingar(host, espera=1):
+    """ICMP ping, um pacote. True = respondeu, False = nao, None = nao sei.
+
+    Usa o binario `ping` do sistema: ICMP por socket exige privilegio e nao
+    vale a complicacao — a pergunta e so "a maquina esta ligada".
+
+    None e devolvido quando NAO DA PARA SABER (binario ausente, parametro
+    recusado). Devolver False nesses casos afirmaria que a maquina esta
+    offline, o que e pior do que nao mostrar nada.
+    """
+    if not host:
+        return False
+    # sintaxe do `ping` diverge entre plataformas: Linux/BSD usam -c
+    # (contagem) e -W em SEGUNDOS; o ping.exe do Windows usa -n (contagem)
+    # e -w em MILISSEGUNDOS. Passar a sintaxe errada nao falha graciosamente
+    # — o ping so reclama de parametro invalido e cai no ramo "nao sei"
+    # abaixo (returncode fora de 0/1), deixando o indicador de vida sempre
+    # cinza. Achado ao portar do Linux (2026-09), nunca testado antes por
+    # nao existir no Windows ate esta atualizacao.
+    if sys.platform == "win32":
+        cmd = ["ping", "-n", "1", "-w", str(int(espera * 1000)), host]
+    else:
+        cmd = ["ping", "-c", "1", "-W", str(espera), "-n", host]
+    try:
+        # CREATE_NO_WINDOW: sem isso, cada ping pisca um console preto na
+        # tela — o pool de sondagem chama pingar() em rajada pra cada card
+        # visivel, entao sem essa flag seria uma piscadela por maquina.
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        r = subprocess.run(cmd, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT,
+                           timeout=espera + 2, creationflags=flags)
+    except FileNotFoundError:
+        _diag_ping("binario `ping` nao encontrado no PATH")
+        return None
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception as e:
+        _diag_ping("falhou: %s: %s" % (type(e).__name__, e))
+        return None
+
+    if r.returncode == 0:
+        return True
+    # returncode 1 = sem resposta (offline de verdade).
+    # Qualquer outro codigo e o ping reclamando de uso/parametro — nao e
+    # resposta sobre a maquina, entao vira "nao sei", com diagnostico.
+    if r.returncode == 1:
+        return False
+    _diag_ping("codigo %d: %s" % (
+        r.returncode,
+        (r.stdout or b"").decode("utf-8", "replace").strip()[:200]))
+    return None
+
+
+def _diag_ping(msg):
+    """Fala UMA vez no stderr. Indicador que falha calado nao se conserta."""
+    if _PING_DIAG["feito"]:
+        return
+    _PING_DIAG["feito"] = True
+    print("[acessos] indicador de vida indisponivel — %s" % msg,
+          file=sys.stderr, flush=True)
+
+
+def icone_acao(tipo, px=15):
+    """Glifo do protocolo para o card. Mesmo mapa das abas, de proposito.
+
+    O card e a aba precisam mostrar o MESMO simbolo — e o que faz a aba ser
+    reconhecida em vez de lida. Se o tema de icones nao tiver nenhum dos
+    nomes, cai no texto curto (VNC/SSH/RDP/SFTP)."""
+    nomes = ICONES_ABA.get(tipo)
+    if nomes:
+        tema_ic = Gtk.IconTheme.get_default()
+        for nome in nomes[:-1]:
+            try:
+                if tema_ic.has_icon(nome):
+                    img = Gtk.Image.new_from_icon_name(nome,
+                                                       Gtk.IconSize.MENU)
+                    img.set_pixel_size(px)
+                    img.set_valign(Gtk.Align.CENTER)
+                    img.set_halign(Gtk.Align.CENTER)
+                    return img
+            except Exception:
+                continue
+        texto = nomes[-1]
+    else:
+        texto = tipo.upper()
+    lb = Gtk.Label(label=texto)
+    lb.set_valign(Gtk.Align.CENTER)
+    return add_class(lb, "card-ico-txt")
+
+
+# ---------------------------------------------------------------- efemeras
+PORTA_PROTO = {"22": "ssh", "3389": "rdp", "5900": "vnc"}
+
+
+def interpretar_alvo(texto):
+    """Le o que foi digitado na busca e devolve (dados, protocolo) ou None.
+
+    Aceita as formas que a mao ja digita sozinha:
+        10.1.1.99                 -> VNC 5900
+        10.1.1.99:22              -> SSH  (porta decide o protocolo)
+        zanthus@10.1.1.99         -> SSH  (usuario implica shell)
+        rdp serv-ad-2025          -> RDP  (prefixo manda, ignora inferencia)
+
+    Devolve None quando o texto nao parece um destino — assim a busca
+    continua se comportando como busca para qualquer outra coisa.
+    """
+    txt = (texto or "").strip()
+    if not txt or len(txt) > 120:
+        return None
+
+    proto = None
+    for p in ("vnc", "ssh", "rdp"):
+        if txt.lower().startswith(p + " "):
+            proto, txt = p, txt[len(p) + 1:].strip()
+            break
+
+    usuario = ""
+    tem_usuario = False
+    if "@" in txt:
+        usuario, _, txt = txt.partition("@")
+        usuario, txt = usuario.strip(), txt.strip()
+        tem_usuario = True
+
+    porta = ""
+    if ":" in txt:
+        txt, _, porta = txt.partition(":")
+        txt, porta = txt.strip(), porta.strip()
+        if not porta.isdigit():
+            return None
+
+    # PRECEDENCIA: prefixo explicito > porta > usuario@ > padrao.
+    # A porta vence o "@" porque e sinal mais forte: em "admin@serv:3389" o
+    # 3389 diz RDP alto e claro, e o usuario apenas acompanha.
+    if proto is None:
+        proto = PORTA_PROTO.get(porta) or ("ssh" if tem_usuario else None)
+
+    if not txt:
+        return None
+    # host plausivel: sem espaco e so com caracteres de host
+    if " " in txt or not all(ch.isalnum() or ch in ".-_" for ch in txt):
+        return None
+
+    proto = proto or "vnc"
+    dados = {"host": txt, "grupo": "temporária",
+             "vnc": "nao", "ssh": "nao", "rdp": "nao"}
+    if proto == "ssh":
+        dados.update(ssh="sim", ssh_porta=porta or "22", ssh_usuario=usuario)
+    elif proto == "rdp":
+        dados.update(rdp="sim", rdp_porta=porta or "3389",
+                     rdp_usuario=usuario)
+    else:
+        dados.update(vnc="sim", porta=porta or "5900", usuario=usuario)
+    return dados, proto
+
+
+def conexao_efemera(dados):
+    """Conexao que vive SO em memoria.
+
+    Marcada com `efemera=True`: e o que mantem ela fora da execucao em lote
+    e fora do cofre. Nada e escrito no conexoes.ini, e ao fechar a aba ela
+    (e a senha digitada) somem junto — orquestrador nao guarda lixo.
+    """
+    cx = Conexao(dados["host"], dados)
+    cx.efemera = True
+    return cx
+
+
 def agora():
     return GLib.DateTime.new_now_local().format("%H:%M:%S")
 
@@ -705,10 +934,9 @@ def segmentado(opcoes, ativo, ao_mudar, prefixo_classe="seg"):
     marcado e engole o primeiro clique.
 
     `prefixo_classe`: troca a familia de classes CSS ("seg"/"seg-ini"/
-    "seg-fim"/"seg-meio" por padrao) por outra — existe pra um segmentado
-    poder viver fora de uma area de conteudo (cartao claro) sem ficar com
-    a paleta errada; ver ".seg-topo*" em tema.py, usado pelo seletor de
-    tema, que mora na barra de titulo (vidro escuro)."""
+    "seg-fim"/"seg-meio" por padrao) — usado pelo seletor de tema, que vive
+    na titlebar escura e precisa de uma paleta propria (`seg-topo*`, ver
+    tema.py) em vez da paleta clara do resto da interface."""
     caixa = Gtk.Box(spacing=0)
     botoes = {}
     estado = {"trocando": False}
@@ -746,6 +974,95 @@ def segmentado(opcoes, ativo, ao_mudar, prefixo_classe="seg"):
 
 
 # ------------------------------------------------- gravacao cirurgica no INI
+
+HISTORICO_MAX = 20
+SECAO_COFRE_NOME = "cofre"
+
+
+def _tem_secao_cofre(linhas):
+    alvo = "[%s]" % SECAO_COFRE_NOME
+    return any(ln.strip().lower() == alvo for ln in linhas)
+
+
+def _guardar_copia(caminho, motivo=""):
+    """Copia versionada ANTES de gravar. Mantem as HISTORICO_MAX ultimas.
+
+    Rotacao por EVENTO DE GRAVACAO, nao por tempo: o uso e em rajadas —
+    doze caixas numa tarde e nada por um mes. Por tempo, a rajada inteira
+    caberia numa copia so.
+
+    Fica FORA de qualquer pasta sincronizada por decisao: 20 copias indo
+    para a nuvem a cada gravacao multiplicaria trafego e exposicao. Perda
+    da maquina inteira e coberta pela sincronizacao do proprio INI.
+    """
+    try:
+        base = os.path.join(os.path.dirname(caminho) or ".", "historico")
+        os.makedirs(base, exist_ok=True)
+        if not os.path.exists(caminho):
+            return
+        carimbo = time.strftime("%Y%m%d-%H%M%S")
+        destino = os.path.join(base, "conexoes.%s.ini" % carimbo)
+        if not os.path.exists(destino):
+            shutil.copy2(caminho, destino)
+        if motivo:
+            with open(os.path.join(base, "index.txt"), "a",
+                      encoding="utf-8") as f:
+                # o motivo vale mais que a hora: ninguem lembra o horario,
+                # lembra o que fez
+                f.write("%s  %s\n" % (carimbo, motivo))
+        copias = sorted(n for n in os.listdir(base)
+                        if n.startswith("conexoes.") and n.endswith(".ini"))
+        for velha in copias[:-HISTORICO_MAX]:
+            try:
+                os.remove(os.path.join(base, velha))
+            except OSError:
+                pass
+    except Exception as e:
+        sys.stderr.write("[ini] historico falhou: %s\n" % e)
+
+
+def escrever_ini(caminho, linhas, motivo=""):
+    """Ponto UNICO de escrita do INI. Atomico, com fsync e guardas.
+
+    - GUARDA DO COFRE: se o arquivo atual tem [cofre] e o conteudo novo
+      nao, a gravacao e ABORTADA. A secao guarda o salt; sem ele, a mesma
+      senha mestra deriva outra chave e nenhuma senha guardada abre. Bug
+      aqui custaria o cofre inteiro, entao ele nao passa.
+    - fsync antes do replace: sem ele o os.replace pode trocar o nome
+      enquanto o conteudo ainda esta em cache, e uma queda deixa o arquivo
+      novo VAZIO — pior que o antigo intacto.
+    """
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            antigas = f.readlines()
+    except OSError:
+        antigas = []
+
+    if antigas and _tem_secao_cofre(antigas) and not _tem_secao_cofre(linhas):
+        sys.stderr.write(
+            "[ini] GRAVACAO ABORTADA: o conteudo novo nao tem a secao "
+            "[%s] e o arquivo atual tem. Sem o salt as senhas guardadas "
+            "ficam irrecuperaveis.\n" % SECAO_COFRE_NOME)
+        return False
+
+    _guardar_copia(caminho, motivo)
+
+    tmp = caminho + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(linhas)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, caminho)
+        return True
+    except OSError as e:
+        sys.stderr.write("[ini] falha ao gravar: %s\n" % e)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
 
 def gravar_chave(caminho, secao, chave, valor):
     """Troca UMA linha do INI preservando comentarios, ordem e alinhamento.
@@ -802,11 +1119,9 @@ def gravar_chave(caminho, secao, chave, valor):
                 corte -= 1
             linhas.insert(corte, "%s = %s\n" % (chave, valor))
 
-    tmp = caminho + ".tmp"
+    if not escrever_ini(caminho, linhas, "%s/%s" % (secao, chave)):
+        return False
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.writelines(linhas)
-        os.replace(tmp, caminho)
         if DEBUG:
             sys.stderr.write("[ini] [%s] %s = %s\n" % (secao, chave, valor))
         return True
@@ -852,12 +1167,8 @@ def remover_secao(caminho, secao):
         topo += 1
 
     del linhas[topo:fim]
-    tmp = caminho + ".tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.writelines(linhas)
-        os.replace(tmp, caminho)
-        return True
+        return escrever_ini(caminho, linhas, "secao %s" % secao)
     except OSError:
         return False
 
@@ -897,12 +1208,8 @@ def apagar_chave(caminho, secao, chave):
         m = re_kv.match(linhas[i])
         if m and m.group("k").strip().lower() == chave.lower():
             del linhas[i]
-    tmp = caminho + ".tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.writelines(linhas)
-        os.replace(tmp, caminho)
-        return True
+        return escrever_ini(caminho, linhas, "secao %s" % secao)
     except OSError:
         return False
 
@@ -919,6 +1226,9 @@ def verdade(txt, padrao=False):
 class Conexao:
     def __init__(self, nome, sec):
         self.nome  = nome
+        # efemera: conexao digitada na busca, viva so nesta sessao. Default
+        # False para que qualquer codigo possa consultar sem verificar.
+        self.efemera = False
         self.host  = sec.get("host", "").strip()
         self.grupo = sec.get("grupo", "Sem grupo").strip()
 
@@ -1043,8 +1353,9 @@ class Snippet:
 
 
 def caminho_snippets():
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return os.path.join(base, "acessos", "snippets.ini")
+    # acompanha o caminho= do [geral]: separar snippets do INI faria a
+    # pasta sincronizada levar metade da configuracao
+    return os.path.join(dir_dados(), "snippets.ini")
 
 
 def carregar_snippets(caminho=None):
@@ -1065,14 +1376,121 @@ def carregar_snippets(caminho=None):
     return itens
 
 
-def caminho_conf(arg=None):
-    if arg:
-        return os.path.abspath(os.path.expanduser(arg))
+BASE_DADOS = None      # diretorio efetivo dos arquivos do app
+
+
+def _dir_padrao():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return os.path.join(base, "acessos", "conexoes.ini")
+    return os.path.join(base, "acessos")
 
 
-def instalar_css_cedo(tema, fonte_grande=False):
+def _ler_caminho_geral(arquivo):
+    """Le [geral] caminho= sem carregar o INI inteiro.
+
+    Precisa ser leitura crua: neste ponto o cofre ainda nao existe e o
+    parser completo do app ainda nao rodou.
+    """
+    try:
+        cp = configparser.ConfigParser(interpolation=None)
+        cp.read(arquivo, encoding="utf-8")
+        valor = (cp["geral"].get("caminho", "") if cp.has_section("geral")
+                 else "").strip()
+    except Exception:
+        return ""
+    return os.path.abspath(os.path.expanduser(valor)) if valor else ""
+
+
+def caminho_conf(arg=None):
+    """Descobre o conexoes.ini efetivo e fixa BASE_DADOS.
+
+    A chave [geral] caminho= aponta um DIRETORIO. O INI do lugar padrao
+    funciona como ponteiro: se ele traz essa chave, o app passa a usar o
+    conexoes.ini daquele diretorio, e snippets e historico acompanham.
+
+    Isso resolve o problema do ovo e da galinha — para ler a chave e
+    preciso abrir algum INI antes. Um unico salto e permitido, de
+    proposito: dois arquivos apontando um para o outro entrariam em laco.
+    """
+    global BASE_DADOS
+
+    if arg:
+        alvo = os.path.abspath(os.path.expanduser(arg))
+        BASE_DADOS = os.path.dirname(alvo)
+        return alvo
+
+    padrao = os.path.join(_dir_padrao(), "conexoes.ini")
+    destino = _ler_caminho_geral(padrao)
+
+    if destino and os.path.isdir(destino):
+        alvo = os.path.join(destino, "conexoes.ini")
+        if os.path.exists(alvo) and os.path.abspath(alvo) != os.path.abspath(padrao):
+            BASE_DADOS = destino
+            if DEBUG:
+                sys.stderr.write("[ini] caminho= redireciona para %s\n" % alvo)
+            return alvo
+        if not os.path.exists(alvo):
+            sys.stderr.write(
+                "[ini] [geral] caminho aponta para %s, mas nao ha "
+                "conexoes.ini la — usando o arquivo padrao.\n" % destino)
+
+    BASE_DADOS = _dir_padrao()
+    return padrao
+
+
+def mover_dados_para(destino):
+    """Passa a usar `destino` como pasta dos arquivos do app.
+
+    Devolve (diretorio_efetivo, lista_do_que_foi_copiado).
+
+    Regras, todas pensadas para nao surpreender:
+      - a pasta e criada se nao existir;
+      - se ja tiver conexoes.ini, ele e USADO como esta — nada e
+        sobrescrito, porque a pasta pode ser a de outra maquina que ja
+        sincronizou;
+      - se estiver vazia, os arquivos atuais sao COPIADOS para la;
+      - o original NAO e apagado. Se algo der errado, e so limpar a chave
+        `caminho` e tudo volta ao que era;
+      - a chave vai no INI do lugar PADRAO, que passa a ser o ponteiro. Se
+        ela fosse gravada no arquivo de destino, ninguem a leria.
+    """
+    destino = os.path.abspath(os.path.expanduser(destino))
+    os.makedirs(destino, exist_ok=True)
+    if not os.access(destino, os.W_OK):
+        raise OSError("sem permissão de escrita em %s" % destino)
+
+    padrao_dir = _dir_padrao()
+    origem = dir_dados()
+    copiados = []
+
+    if os.path.abspath(destino) != os.path.abspath(origem):
+        for nome in ("conexoes.ini", "snippets.ini"):
+            alvo = os.path.join(destino, nome)
+            fonte = os.path.join(origem, nome)
+            if not os.path.exists(alvo) and os.path.exists(fonte):
+                shutil.copy2(fonte, alvo)
+                copiados.append(nome)
+
+    # a chave mora no arquivo do lugar padrao: e ele que o app abre primeiro
+    os.makedirs(padrao_dir, exist_ok=True)
+    ini_padrao = os.path.join(padrao_dir, "conexoes.ini")
+    if not os.path.exists(ini_padrao):
+        with open(ini_padrao, "w", encoding="utf-8") as f:
+            f.write("[geral]\n")
+
+    if os.path.abspath(destino) == os.path.abspath(padrao_dir):
+        apagar_chave(ini_padrao, "geral", "caminho")
+    else:
+        gravar_chave(ini_padrao, "geral", "caminho", destino)
+
+    return destino, copiados
+
+
+def dir_dados():
+    """Diretorio dos arquivos do app. Resolve tarde para respeitar caminho=."""
+    return BASE_DADOS or _dir_padrao()
+
+
+def instalar_css_cedo(tema):
     """Instala a folha de estilo ANTES de qualquer janela existir.
 
     O provider so era adicionado dentro de Janela.__init__, mas o dialogo do
@@ -1082,14 +1500,14 @@ def instalar_css_cedo(tema, fonte_grande=False):
 
     A Janela chama _aplicar_css() de novo depois; adicionar o provider duas
     vezes e inofensivo, e a segunda chamada e que passa a valer quando o
-    tema (ou a fonte) e trocado em tempo de execucao.
+    tema e trocado em tempo de execucao.
     """
     tema = (tema or "claro").strip().lower()
     if tema not in TEMAS:
         tema = "claro"
     prov = Gtk.CssProvider()
     try:
-        prov.load_from_data(gerar_css(tema, fonte_grande))
+        prov.load_from_data(gerar_css(tema))
     except GLib.Error:
         return None
     Gtk.StyleContext.add_provider_for_screen(
@@ -1117,11 +1535,6 @@ def ler_geral(caminho, chave, padrao=""):
 def ler_tema(caminho):
     """So o tema, sem carregar o resto — usado antes do cofre abrir."""
     return ler_geral(caminho, "tema", "claro") or "claro"
-
-
-def ler_fonte_grande(caminho):
-    """So a preferencia de fonte grande, mesma logica de ler_tema."""
-    return verdade(ler_geral(caminho, "fonte_grande", ""), False)
 
 
 def carregar(caminho):
@@ -1414,7 +1827,9 @@ class AbaBase(Gtk.Box):
         self._timers = set()
 
         self.barra = Gtk.Box(spacing=4)
-        self.barra.set_border_width(2)
+        # 2 -> 0: a altura da barra vinha do border_width, nao da fonte.
+        # Zerando, ela encolhe sem que nenhum texto mude de tamanho.
+        self.barra.set_border_width(0)
         self.chip_estado = chip("AGUARDE", "neutro")
         self.lb_estado = rotulo("…", "secundario")
         self.lb_geo = rotulo("", "secundario", xalign=1.0)
@@ -1650,7 +2065,10 @@ class AbaVnc(AbaBase, CapturaTeclado):
         self.bt_auto.set_active(self.cx.auto)
         self._ligar_auto("auto")
 
-        self.bt_olho = Gtk.ToggleButton(label="👁")
+        # sem label no construtor: quem monta o filho e o _sync_olho. Com o
+        # emoji aqui, o primeiro desenho ja saia com a altura dele e a barra
+        # nascia grande antes da primeira troca de estado.
+        self.bt_olho = Gtk.ToggleButton()
         add_class(self.bt_olho, "tog", "tog-bloq", "tog-glifo")
         self.bt_olho.set_active(self.cx.ronly)
         self.bt_olho.connect("toggled", self._trocar_ronly)
@@ -2171,7 +2589,45 @@ class AbaVnc(AbaBase, CapturaTeclado):
     def _sync_olho(self):
         # so o glifo: o estado ja e dito pela cor e pelo tooltip
         travado = self.bt_olho.get_active()
-        self.bt_olho.set_label("🚫" if travado else "👁")
+        # ICONE SIMBOLICO, nao emoji.
+        #
+        # O glifo 👁 e mais ALTO que o 🚫 na fonte de emoji, e a altura do
+        # botao acompanha a do texto: a barra inteira crescia ao liberar a
+        # entrada e encolhia ao bloquear. Depende da fonte de emoji da
+        # distro, por isso acontecia no Arch e nao no Fedora.
+        #
+        # set_size_request nao resolve sozinho: ele define o MINIMO, e um
+        # glifo mais alto passa por cima. Icone simbolico tem tamanho em
+        # pixel definido por nos e nao depende de fonte nenhuma. O emoji
+        # fica so como ultimo recurso.
+        nomes = (("changes-prevent-symbolic", "action-unavailable-symbolic")
+                 if travado else
+                 ("changes-allow-symbolic", "view-reveal-symbolic"))
+        img = None
+        tema_ic = Gtk.IconTheme.get_default()
+        for nome in nomes:
+            try:
+                if tema_ic.has_icon(nome):
+                    img = Gtk.Image.new_from_icon_name(nome,
+                                                       Gtk.IconSize.MENU)
+                    img.set_pixel_size(14)
+                    break
+            except Exception:
+                continue
+        filho = self.bt_olho.get_child()
+        if filho is not None:
+            filho.destroy()
+        if img is not None:
+            img.show()
+            self.bt_olho.add(img)
+        else:
+            lb = Gtk.Label(label="🚫" if travado else "👁")
+            lb.show()
+            self.bt_olho.add(lb)
+        # trava largura E altura, e centra: assim nem o fallback de emoji
+        # consegue esticar a barra
+        self.bt_olho.set_size_request(28, 20)
+        self.bt_olho.set_valign(Gtk.Align.CENTER)
         self.bt_olho.set_tooltip_text(
             "Entrada BLOQUEADA — clique para liberar teclado e mouse"
             if travado else
@@ -2693,8 +3149,11 @@ class AbaRdp(AbaBase, CapturaTeclado):
         """Desmonta o socket e poe o painel de controle no lugar."""
         self.embutido = False
         self.socket = None
+        # destroy(): o socket e o painel antigos precisam MORRER, nao apenas
+        # sair do container — senao suas GdkWindow continuam capturando
+        # clique por cima do que vier depois
         for f in self.palco.get_children():
-            self.palco.remove(f)
+            f.destroy()
         self.palco.pack_start(self._aviso_externo(), True, True, 0)
         self.palco.show_all()
 
@@ -3117,6 +3576,11 @@ class EditorSnippets(Gtk.Dialog):
         self.caminho = caminho_snippets()
         self.set_default_size(860, 560)
         janela.soltar_capturas()
+        try:
+            import dialogo_ui
+            dialogo_ui.estilizar_headerbar(self, "Snippets")
+        except Exception:
+            pass
 
         botao_dialogo(self, "Fechar", Gtk.ResponseType.CLOSE, "perigo")
         botao_dialogo(self, "Salvar", Gtk.ResponseType.APPLY, "acao")
@@ -3323,8 +3787,19 @@ class EditorConexao(Gtk.Dialog):
         # dialogo abriria com os campos inertes.
         janela.soltar_capturas()
 
+        # Cancelar e VERMELHO. Regra da interface: acao destrutiva usa a cor
+        # de erro sempre — nao so no hover, nao em contorno tenue. Cancelar
+        # descarta o que foi digitado, entao entra na regra.
         botao_dialogo(self, "Cancelar", Gtk.ResponseType.CANCEL, "perigo")
         botao_dialogo(self, "Salvar", Gtk.ResponseType.OK, "acao")
+        try:
+            # import local: o dialogo_ui resolve o estilo pelo __main__ em
+            # tempo de chamada, entao importar aqui (e nao no topo) evita
+            # qualquer ordem de carga esquisita
+            import dialogo_ui
+            dialogo_ui.estilizar_headerbar(self, titulo)
+        except Exception:
+            pass
         # sem set_default_response: o estado .default e uma das vias pelas
         # quais o tema desenha a moldura. Enter e tratado abaixo.
         self.connect("key-press-event", self._teclas)
@@ -3380,7 +3855,22 @@ class EditorConexao(Gtk.Dialog):
         self._preencher()
         self.show_all()
         self._sincronizar_blocos()
+        # show_all() reabre TODOS os corpos; o acordeao e exclusivo, entao o
+        # estado inicial precisa ser reimposto depois dele. Abre o primeiro
+        # servico ligado — e o que o usuario vai querer conferir.
+        self._acordeao_inicial()
         self.campos["nome"].grab_focus()
+
+    def _acordeao_inicial(self):
+        escolhido = None
+        for tipo in ("vnc", "ssh", "rdp"):
+            if tipo in self._disclosures and self.chaves[tipo].get_active():
+                escolhido = tipo
+                break
+        if escolhido is None:
+            escolhido = "vnc"
+        self._abrir_bloco(escolhido)
+        self._encolher_para_conteudo()
 
     def _teclas(self, _w, ev):
         nome = Gdk.keyval_name(ev.keyval) or ""
@@ -3449,12 +3939,33 @@ class EditorConexao(Gtk.Dialog):
         cab = Gtk.Box(spacing=8)
         cab.set_border_width(10)
 
-        bt_disc = Gtk.Button(label="▾")
-        add_class(bt_disc, "secundaria", "tog-glifo")
+        # ACORDEAO EXCLUSIVO: o cabecalho INTEIRO e o alvo de clique, nao um
+        # glifo de 12px no canto. O disclosure textual (▸/▾) sai — o proprio
+        # estado aberto/fechado ja e visivel pelo corpo do bloco.
+        bt_disc = Gtk.Button()
+        add_class(bt_disc, "bloco-cabbt")
         bt_disc.set_relief(Gtk.ReliefStyle.NONE)
-        cab.pack_start(bt_disc, False, False, 0)
+        bt_disc.set_hexpand(True)
 
-        cab.pack_start(rotulo(titulo, "bloco-cab"), True, True, 0)
+        # ICONE DO PROTOCOLO no cabecalho: o mesmo glifo do card e da aba.
+        # Fica ao lado do disclosure, colorido quando o servico esta ligado
+        # e cinza quando desligado — a mesma leitura dos icones-acao do
+        # card, entao o editor fala a mesma lingua do resto.
+        #
+        # Os blocos continuam INDEPENDENTES de proposito: dois abertos ao
+        # mesmo tempo permite comparar porta e usuario entre VNC e SSH, que
+        # e o caso real ao cadastrar maquina nova. Um acordeao que fecha o
+        # anterior mataria essa comparacao.
+        self.icones_bloco = getattr(self, "icones_bloco", {})
+        ic = icone_acao(tipo, 15)
+        add_class(ic, "bloco-ico", "bloco-ico-" + tipo)
+        self.icones_bloco[tipo] = ic
+
+        dentro = Gtk.Box(spacing=8)
+        dentro.pack_start(ic, False, False, 0)
+        dentro.pack_start(rotulo(titulo, "bloco-cab"), False, False, 0)
+        bt_disc.add(dentro)
+        cab.pack_start(bt_disc, True, True, 0)
         self.resumos = getattr(self, "resumos", {})
         self.resumos[tipo] = rotulo("", "dica", xalign=1.0)
         cab.pack_start(self.resumos[tipo], False, False, 0)
@@ -3473,9 +3984,14 @@ class EditorConexao(Gtk.Dialog):
         raiz.pack_start(corpo, False, False, 0)
 
         def alternar_disclosure(_b=None):
-            aberto = corpo.get_visible()
-            corpo.set_visible(not aberto)
-            bt_disc.set_label("▾" if not aberto else "▸")
+            """Exclusivo: abre este e fecha os outros; se ja estava aberto,
+            fecha e o dialogo encolhe. A janela so estica pelo bloco que
+            estiver aberto — era esse o pedido."""
+            if corpo.get_visible():
+                corpo.set_visible(False)
+                bt_disc.get_style_context().remove_class("bloco-aberto")
+            else:
+                self._abrir_bloco(tipo)
             self._encolher_para_conteudo()
 
         bt_disc.connect("clicked", alternar_disclosure)
@@ -3531,12 +4047,34 @@ class EditorConexao(Gtk.Dialog):
         return raiz
 
     def _chave_mudou(self, chave, _p, tipo):
+        """NUNCA chamar set_label() neste botao.
+
+        Gtk.Button.set_label() DESTROI o filho atual e cria um Label no
+        lugar. Como o cabecalho carrega uma Box com o icone e o titulo
+        dentro, cada set_label apagava os dois e deixava so a setinha — era
+        isso que fazia o icone sumir ao ligar o switch.
+
+        Ligar um servico agora ABRE o bloco dele (e fecha os outros, o
+        acordeao e exclusivo); desligar apenas fecha."""
         ligado = chave.get_active()
-        corpo, bt_disc = self._disclosures[tipo]
-        corpo.set_visible(ligado)
-        bt_disc.set_label("▾" if ligado else "▸")
+        if ligado:
+            self._abrir_bloco(tipo)
+        else:
+            corpo, bt_disc = self._disclosures[tipo]
+            corpo.set_visible(False)
+            bt_disc.get_style_context().remove_class("bloco-aberto")
         self._sincronizar_blocos()
         self._encolher_para_conteudo()
+
+    def _abrir_bloco(self, alvo):
+        """Deixa somente `alvo` aberto. Ponto unico do acordeao."""
+        for tipo, (corpo, bt) in self._disclosures.items():
+            ativo = (tipo == alvo)
+            corpo.set_visible(ativo)
+            ctx = bt.get_style_context()
+            ctx.remove_class("bloco-aberto")
+            if ativo:
+                ctx.add_class("bloco-aberto")
 
     def _encolher_para_conteudo(self):
         """O GTK3 nao encolhe a janela sozinho quando um filho fica menor —
@@ -3556,6 +4094,14 @@ class EditorConexao(Gtk.Dialog):
             if not ligado:
                 ctx.add_class("bloco-off")
             self.resumos[tipo].set_text("" if ligado else "desligado")
+            # o icone do cabecalho segue o switch: colorido = configurado,
+            # cinza = desligado. Mesma leitura dos icones-acao do card.
+            ic = getattr(self, "icones_bloco", {}).get(tipo)
+            if ic is not None:
+                ictx = ic.get_style_context()
+                ictx.remove_class("bloco-ico-off")
+                if not ligado:
+                    ictx.add_class("bloco-ico-off")
 
     # ---- carga
     def _preencher(self):
@@ -3585,9 +4131,9 @@ class EditorConexao(Gtk.Dialog):
         # widget), o corpo tem de ser escondido explicitamente aqui
         for tipo, ligado in (("vnc", c.tem_vnc), ("ssh", c.tem_ssh),
                              ("rdp", c.tem_rdp)):
-            corpo, bt_disc = self._disclosures[tipo]
+            corpo, _bt = self._disclosures[tipo]
+            # so visibilidade: set_label aqui destruiria icone e titulo
             corpo.set_visible(ligado)
-            bt_disc.set_label("▾" if ligado else "▸")
         self.seg_modo_bt[c.modo].set_active(True)
         self.seg_rdp_bt[c.rdp_tela].set_active(True)
         self.cb_ronly.set_active(c.ronly)
@@ -3719,12 +4265,12 @@ class Janela(Gtk.Window):
     # so garante um piso, nunca um teto — a unica forma de a barra de abas
     # nunca crescer, aconteça o que acontecer dentro de cada aba, e travar
     # esse valor explicitamente em toda construcao de rotulo de aba.
-    ALTURA_ABA = 24
+    ALTURA_ABA = 22
     # Alturas ABSOLUTAS das duas partes do card que variavam de tamanho
     # conforme o conteudo (bloco de meta e linha de botoes). Travadas em
     # pixels, todo card fica com a MESMA altura, tenha ele 1, 2 ou 3
     # servicos configurados.
-    ALT_META = 42
+    ALT_META = 34
     ALT_BOTOES = 30
 
     def __init__(self, conexoes, geral, caminho):
@@ -3759,7 +4305,6 @@ class Janela(Gtk.Window):
         self.tema = geral.get("tema", "claro").strip().lower()
         if self.tema not in TEMAS:
             self.tema = "claro"
-        self.fonte_grande = verdade(geral.get("fonte_grande", ""), False)
         self.prov = Gtk.CssProvider()
 
         self.set_default_size(1340, 840)
@@ -3779,7 +4324,7 @@ class Janela(Gtk.Window):
         # levanta GError — sem este guarda, um erro de estilo impede o
         # programa de abrir. Melhor rodar feio do que nao rodar.
         try:
-            self.prov.load_from_data(gerar_css(self.tema, self.fonte_grande))
+            self.prov.load_from_data(gerar_css(self.tema))
         except GLib.Error as e:
             sys.stderr.write("CSS recusado (%s); seguindo com o tema do "
                              "sistema\n" % e.message)
@@ -3846,8 +4391,6 @@ class Janela(Gtk.Window):
             self.gravar(SECAO_GERAL, "lateral",
                         "1" if self.bt_lateral.get_active() else "0")
             self.gravar(SECAO_GERAL, "tema", self.tema)
-            self.gravar(SECAO_GERAL, "fonte_grande",
-                        "1" if self.fonte_grande else "0")
         except Exception:
             pass
         if sys.platform == "win32":
@@ -3892,12 +4435,15 @@ class Janela(Gtk.Window):
         esq = Gtk.Box(spacing=8)
         self.bt_lateral = Gtk.ToggleButton(label="☰")
         add_class(self.bt_lateral, "btn-topo")
+        # ALINHAMENTO, nao CSS: botao em headerbar nasce com valign FILL e
+        # estica ate a altura da barra — o min-height do tema nunca ia
+        # segurar. CENTER e o que faz a pilula ter altura propria.
+        self.bt_lateral.set_valign(Gtk.Align.CENTER)
         self.bt_lateral.set_tooltip_text("Mostrar ou esconder a lista (F9)")
         self.bt_lateral.connect("toggled", self._alternar_lateral)
         esq.pack_start(self.bt_lateral, False, False, 0)
         esq.pack_start(rotulo("Acessos", "marca-topo"), False, False, 4)
-        esq.pack_start(rotulo("VNC · SSH · RDP · atualizado ✓", "marca-sub"),
-                      False, False, 0)
+        esq.pack_start(rotulo("VNC · SSH · RDP", "marca-sub"), False, False, 0)
         self.lb_captura = chip("⌨ CAPTURADO — Pause libera", "atencao")
         self.lb_captura.set_no_show_all(True)
         esq.pack_start(self.lb_captura, False, False, 4)
@@ -3917,40 +4463,31 @@ class Janela(Gtk.Window):
         hb.pack_end(dir_)
 
         acoes = Gtk.Box(spacing=5)
-        self.bt_log = Gtk.ToggleButton(label="⚙")
-        add_class(self.bt_log, "btn-topo")
-        self.bt_log.set_tooltip_text(
-            "Mostrar o painel de diagnóstico nas abas (F12)")
+        # o glifo de engrenagem foi para os AJUSTES, que e a convencao
+        # universal; o diagnostico vira pilula de texto como as demais
+        # O diagnostico saiu da barra e foi para os Ajustes: e opcao, nao
+        # acao frequente. O ToggleButton continua existindo SEM PAI — ele
+        # segue sendo a fonte unica do estado e o alvo do F12, e o
+        # interruptor dos Ajustes apenas o espelha. Assim nao ha dois
+        # lugares guardando a mesma verdade.
+        self.bt_log = Gtk.ToggleButton()
         self.bt_log.set_active(self.mostrar_log)
         self.bt_log.connect("toggled", self._alternar_log)
-        acoes.pack_start(self.bt_log, False, False, 0)
 
-        # seletor de tema: ANTES era um unico ToggleButton (liga/desliga
-        # escuro); virou um segmentado() de verdade, com os dois nomes a
-        # vista, em vez de um icone so que precisa ser lido pra saber que
-        # estado ta ativo agora. Reaproveita o mesmo helper que ja existe
-        # pra outros seletores no app (ver segmentado(), so nao era usado
-        # aqui ainda).
         caixa_tema, self.botoes_tema = segmentado(
             [("claro", "☾ Claro"), ("escuro", "☀ Escuro")],
             self.tema, self._selecionar_tema, prefixo_classe="seg-topo")
         acoes.pack_start(caixa_tema, False, False, 0)
-
-        self.bt_fonte = Gtk.ToggleButton(label="A+")
-        add_class(self.bt_fonte, "btn-topo")
-        self.bt_fonte.set_active(self.fonte_grande)
-        self.bt_fonte.set_tooltip_text(
-            "Aumentar o tamanho da fonte (1,5×)")
-        self.bt_fonte.connect("toggled", self._alternar_fonte)
-        acoes.pack_start(self.bt_fonte, False, False, 0)
         for texto, dica, fn in (
                 ("✎ snippets", "Biblioteca de comandos para execução em lote",
                  self.abrir_snippets),
                 ("＋ nova", "Cadastrar uma conexão", self.nova_conexao),
                 ("⌂  início", "Voltar ao painel", self._ir_home),
                 ("⟳", "Recarregar o INI", self._recarregar),
-                ("✎  INI", "Abrir o arquivo de conexões", self._editar_ini)):
+                ("✎  INI", "Abrir o arquivo de conexões", self._editar_ini),
+                ("⚙", "Ajustes", self._abrir_ajustes)):
             b = add_class(Gtk.Button(label=texto), "btn-topo")
+            b.set_valign(Gtk.Align.CENTER)
             b.set_tooltip_text(dica)
             b.connect("clicked", fn)
             acoes.pack_start(b, False, False, 0)
@@ -4052,9 +4589,6 @@ class Janela(Gtk.Window):
         return False
 
     def _selecionar_tema(self, tema):
-        """Callback do segmentado() do rodapé/titulo — `tema` já vem como
-        a chave escolhida ("claro"/"escuro"), não um widget; o próprio
-        segmentado() já cuida de manter só um botão marcado."""
         self.tema = tema
         self._aplicar_css()
         self.gravar(SECAO_GERAL, "tema", self.tema)
@@ -4066,14 +4600,6 @@ class Janela(Gtk.Window):
                                         rgba(self.cor("term_bg")), None)
                 except Exception:
                     pass
-
-    def _alternar_fonte(self, bt):
-        # So troca a folha de CSS (font-size); cores e layout nao mudam,
-        # entao nao precisa do mesmo tratamento de aba SSH que o tema tem.
-        self.fonte_grande = bt.get_active()
-        self._aplicar_css()
-        self.gravar(SECAO_GERAL, "fonte_grande",
-                    "1" if self.fonte_grande else "0")
 
     # -------------------------------------------------- lateral
     def _lateral(self):
@@ -4240,17 +4766,6 @@ class Janela(Gtk.Window):
                 continue
         if alvo:
             img_home = Gtk.Image.new_from_icon_name(alvo, Gtk.IconSize.MENU)
-            # ESTE icone e um Gtk.Image de verdade, nao um glifo de texto:
-            # o font-size do CSS (e portanto a ESCALA_GLIFO do tema) NAO o
-            # afeta. Para ele acompanhar os demais, o tamanho vem em
-            # pixels, derivado da mesma escala — assim ha um so lugar para
-            # ajustar (tema.ESCALA_GLIFO) em vez de dois.
-            try:
-                base_px = 16          # equivalente a Gtk.IconSize.MENU
-                img_home.set_pixel_size(
-                    max(base_px, int(round(base_px * ESCALA_GLIFO))))
-            except Exception:
-                pass                  # sem escala o icone so fica no padrao
             img_home.set_valign(Gtk.Align.CENTER)
             img_home.set_halign(Gtk.Align.CENTER)
             rotulo_home.pack_start(img_home, True, True, 8)
@@ -4272,6 +4787,11 @@ class Janela(Gtk.Window):
     # -------------------------------------------------- dashboard
     def _pagina_home(self):
         sw = Gtk.ScrolledWindow()
+        # CLASSE PROPRIA em vez de confiar no seletor "scrolledwindow".
+        # O Adwaita estiliza esses widgets por CLASSE, e classe vence
+        # elemento na especificidade — a regra generica do tema perdia e o
+        # viewport continuava opaco, tampando o gradiente da janela.
+        add_class(sw, "transparente")
         sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.home_caixa = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.home_caixa.set_valign(Gtk.Align.START)
@@ -4375,51 +4895,41 @@ class Janela(Gtk.Window):
         self.busca_home.set_placeholder_text(
             "filtrar máquinas, hosts ou grupos…")
         self.busca_home.connect("search-changed", self._busca_home_mudou)
+        # Enter: se o texto parece um destino e nada bate com o filtro,
+        # conecta direto no protocolo inferido. Achou maquina? Enter nao faz
+        # nada e voce clica no card, como sempre.
+        self.busca_home.connect("activate", self._busca_home_enter)
         barra.pack_start(self.busca_home, True, True, 0)
 
         # --- selecao e execucao em lote, na mesma linha da busca
-        #
-        # SEM O MOTOR, NADA DISSO APARECE.
-        #
-        # Antes o botao ficava visivel e apenas desabilitado, avisando que
-        # "o arquivo massa.py precisa estar ao lado do acessos.py". Isso
-        # faz sentido no Linux, onde o massa.py existe e pode so ter sido
-        # esquecido na copia — e uma instrucao acionavel. No Windows o
-        # massa.py NAO FOI PORTADO de proposito (decisao registrada no
-        # LEIAME), entao a mensagem manda o operador atras de um arquivo
-        # que nunca vai existir. Esconder e mais honesto que desabilitar.
-        self._ui_lote = []
-        if TEM_MASSA:
-            self.lb_selecao = rotulo("", "card-meta", xalign=1.0)
-            barra.pack_end(self.lb_selecao, False, False, 4)
+        self.lb_selecao = rotulo("", "card-meta", xalign=1.0)
+        barra.pack_end(self.lb_selecao, False, False, 4)
 
-            self.bt_lote = add_class(Gtk.Button(label="⚡  executar"), "acao")
-            self.bt_lote.set_tooltip_text(
-                "Executar comandos nas máquinas selecionadas, em lote")
-            self.bt_lote.set_sensitive(False)
-            self.bt_lote.connect("clicked", lambda _b: self.abrir_lote())
-            barra.pack_end(self.bt_lote, False, False, 0)
+        self.bt_lote = add_class(Gtk.Button(label="⚡  executar"), "acao")
+        self.bt_lote.set_tooltip_text(
+            "Executar comandos nas máquinas selecionadas, em lote")
+        self.bt_lote.set_sensitive(False)
+        self.bt_lote.connect("clicked", lambda _b: self.abrir_lote())
+        barra.pack_end(self.bt_lote, False, False, 0)
 
-            # MenuButton em vez de ComboBoxText: o combo do GTK abre o
-            # popup no botao PRESSIONADO e fecha ao soltar, o que obriga a
-            # clicar, segurar e arrastar ate a opcao. Nao era proposital —
-            # e o comportamento padrao dele. O MenuButton abre no clique e
-            # fica aberto, que e o que se espera de um menu de acoes.
-            bt_sel = Gtk.MenuButton(label="seleção  ▾")
-            add_class(bt_sel, "secundaria")
-            bt_sel.set_tooltip_text("Seleção para execução em lote")
-            menu_sel = Gtk.Menu()
-            for acao, rot in (("todos", "selecionar todas"),
-                              ("nenhum", "limpar seleção"),
-                              ("inverter", "inverter seleção")):
-                mi = Gtk.MenuItem(label=rot)
-                mi.connect("activate",
-                           lambda _m, a=acao: self._selecao_massa(a))
-                menu_sel.append(mi)
-            menu_sel.show_all()
-            bt_sel.set_popup(menu_sel)
-            barra.pack_end(bt_sel, False, False, 0)
-            self._ui_lote = [self.lb_selecao, self.bt_lote, bt_sel]
+        # MenuButton em vez de ComboBoxText: o combo do GTK abre o popup
+        # no botao PRESSIONADO e fecha ao soltar, o que obriga a clicar,
+        # segurar e arrastar ate a opcao. Nao era proposital — e o
+        # comportamento padrao dele. O MenuButton abre no clique e fica
+        # aberto, que e o que se espera de um menu de acoes.
+        bt_sel = Gtk.MenuButton(label="seleção  ▾")
+        add_class(bt_sel, "secundaria")
+        bt_sel.set_tooltip_text("Seleção para execução em lote")
+        menu_sel = Gtk.Menu()
+        for acao, rot in (("todos", "selecionar todas"),
+                          ("nenhum", "limpar seleção"),
+                          ("inverter", "inverter seleção")):
+            mi = Gtk.MenuItem(label=rot)
+            mi.connect("activate", lambda _m, a=acao: self._selecao_massa(a))
+            menu_sel.append(mi)
+        menu_sel.show_all()
+        bt_sel.set_popup(menu_sel)
+        barra.pack_end(bt_sel, False, False, 0)
 
         for texto, val in (("expandir tudo", True), ("recolher tudo", False)):
             b = add_class(Gtk.Button(label=texto), "secundaria")
@@ -4431,6 +4941,19 @@ class Janela(Gtk.Window):
         if self._timer_busca:
             GLib.source_remove(self._timer_busca)
         self._timer_busca = GLib.timeout_add(320, self._busca_home_aplicar)
+
+    def _busca_home_enter(self, _e=None):
+        txt = self.busca_home.get_text().strip()
+        if not txt:
+            return
+        alvo = [c for c in self.conexoes
+                if txt.lower() in c.nome.lower()
+                or txt.lower() in c.host.lower()]
+        if alvo:
+            return          # tem resultado: Enter nao atropela a escolha
+        proposta = interpretar_alvo(txt)
+        if proposta:
+            self._conectar_efemero(dict(proposta[0]), proposta[1])
 
     def _busca_home_aplicar(self):
         self._timer_busca = None
@@ -4451,25 +4974,78 @@ class Janela(Gtk.Window):
         andar(self.grupos_caixa)
 
     def _encher_home(self):
+        # A reconstrucao zera a rolagem: o ScrolledWindow perde a posicao
+        # junto com os filhos. Ao duplicar uma conexao no meio de 276
+        # maquinas, a lista pulava para o topo e voce perdia o lugar.
+        # Guarda o valor e devolve DEPOIS que o novo conteudo foi alocado —
+        # antes disso o ajuste ainda nao tem altura para aceitar o valor.
+        try:
+            ajuste = self.home.get_vadjustment()
+            pos = ajuste.get_value()
+        except Exception:
+            ajuste, pos = None, 0.0
+
+        # destroy(), NAO remove().
+        #
+        # remove() apenas desvincula do container: o widget continua VIVO, e
+        # cada EventBox mantem sua propria GdkWindow recebendo clique nas
+        # coordenadas ANTIGAS. Dai o sintoma de "clico numa coisa e abre
+        # outra", e o de botao que nao responde — o clique estava sendo
+        # capturado por um card fantasma de uma reconstrucao anterior.
+        #
+        # Como _encher_home roda a cada tecla digitada na busca e a cada
+        # expandir/recolher, isso vazava centenas de widgets por minuto.
         for f in self.grupos_caixa.get_children():
-            self.grupos_caixa.remove(f)
+            f.destroy()
         # os widgets de marca vao ser recriados junto com os cards; o
         # conjunto self.selecionados (por nome) e que preserva a escolha
         self._marcas.clear()
         self._marcas_grupo.clear()
 
+        # GERACAO: os cards acabaram de ser destruidos. Toda sonda em voo
+        # carrega o numero da geracao em que nasceu e e DESCARTADA se a
+        # lista foi reconstruida no meio do caminho. Sem isso um worker
+        # voltaria escrevendo num Gtk.Box ja destruido — que e exatamente o
+        # tipo de acesso que derruba ou congela o processo.
+        self._geracao = getattr(self, "_geracao", 0) + 1
+        self._vidas = {}
+
         txt = (self.busca_home.get_text() or "").strip().lower()
         alvo = self.conexoes
+        txt_bruto = self.busca_home.get_text().strip()
         if txt:
             alvo = [c for c in alvo
                     if txt in c.nome.lower() or txt in c.host.lower()
                     or txt in c.grupo.lower()]
         if not alvo:
-            self.grupos_caixa.pack_start(
-                rotulo("nenhuma máquina bate com o filtro", "card-meta",
-                       xalign=0.5), False, False, 20)
+            # ESTADO VAZIO UTIL: buscar e nao achar e exatamente o momento em
+            # que voce quer conectar em algo que nao esta cadastrado. Em vez
+            # de so avisar que nao achou, a busca oferece a conexao.
+            vazia = interpretar_alvo(txt_bruto) if txt_bruto else None
+            if vazia:
+                self.grupos_caixa.pack_start(
+                    self._card_efemero(*vazia), False, False, 12)
+            else:
+                self.grupos_caixa.pack_start(
+                    rotulo("nenhuma máquina bate com o filtro", "card-meta",
+                           xalign=0.5), False, False, 20)
             self.grupos_caixa.show_all()
+            self._restaurar_rolagem(ajuste, pos)
             return
+
+        # Resultado parcial ainda merece a oferta: digitar 192.168.12.23
+        # casa com .230 e .231, mas quem digitou pode querer justamente o
+        # .23 que nao existe. So esconde quando o texto bate EXATAMENTE com
+        # um host ja cadastrado — ai nao ha o que oferecer.
+        proposta = interpretar_alvo(txt_bruto) if txt_bruto else None
+        if proposta:
+            alvo_host = proposta[0]["host"].lower()
+            if any(c.host.lower() == alvo_host or c.nome.lower() == alvo_host
+                   for c in self.conexoes):
+                proposta = None
+        if proposta:
+            self.grupos_caixa.pack_start(
+                self._card_efemero(*proposta), False, False, 8)
 
         raiz = {"subs": {}, "itens": []}
         for c in alvo:
@@ -4485,6 +5061,157 @@ class Janela(Gtk.Window):
                 self._no_grupo(nome, raiz["subs"][nome], abrir, 0),
                 False, False, 0)
         self.grupos_caixa.show_all()
+        self._restaurar_rolagem(ajuste, pos)
+        self._sondar_visiveis()
+
+    def _despertar_cards(self):
+        """Refaz o ciclo unmap/map dos cards ao voltar da sessao.
+
+        Cada card e um EventBox, e EventBox tem GdkWindow propria. Ao sair
+        para uma aba de sessao e voltar, essas janelas ficam com o
+        empilhamento desatualizado e param de receber clique — a interface
+        parece congelada, mas so o roteamento de evento e que se perdeu.
+
+        Recolher e expandir o grupo resolvia porque desmapeia e remapeia os
+        widgets. Isto faz o MESMO, sem reconstruir nada: e um ciclo de
+        hide/show no container, nao uma nova montagem, entao nao perde
+        rolagem, selecao nem estado dos grupos.
+        """
+        try:
+            if self.grupos_caixa.get_mapped():
+                self.grupos_caixa.hide()
+                self.grupos_caixa.show()
+        except Exception:
+            pass
+        # retoma o que ficou sem veredito enquanto voce estava na sessao
+        GLib.idle_add(self._sondar_visiveis, priority=GLib.PRIORITY_LOW)
+        return False
+
+    def _sondar_visiveis(self):
+        """Checa so os cards que existem AGORA (grupo expandido).
+
+        Sob demanda de proposito: varrer as 276 continuamente transformaria
+        o painel num monitor, com trafego e threads que voce nao pediu.
+        Expandiu o grupo, checa aquele grupo.
+        """
+        # so os que ainda nao tem veredito: expandir um segundo grupo nao
+        # deve refazer o ping do primeiro
+        # devolve False sempre: e usado como callback de GLib.idle_add ao
+        # expandir um grupo, e um retorno verdadeiro faria o idle repetir
+        # para sempre
+        alvos = []
+        for nome in list(self._vidas):
+            w = self._vidas[nome]
+            ctx = w.get_style_context()
+            if ctx.has_class("vida-on") or ctx.has_class("vida-off"):
+                continue
+            alvos.append((nome, w))
+        if not alvos:
+            return False
+
+        # NAO SONDA FORA DO PAINEL.
+        # Cada ping bifurca um processo; dezenas disso enquanto o gtk-frdp
+        # negocia certificado e autenticacao deixavam a interface
+        # irresponsiva ate a sessao resolver. Se voce nao esta olhando a
+        # lista, a cor pode esperar — quando voltar, o proprio despertar dos
+        # cards dispara de novo.
+        try:
+            if self.nb.get_nth_page(self.nb.get_current_page()) is not self.home:
+                return False
+        except Exception:
+            pass
+
+        geracao = self._geracao
+        por_nome = {c.nome: c for c in self.conexoes}
+
+        def _trabalho():
+            from concurrent.futures import ThreadPoolExecutor
+            import traceback
+            # poucos workers: sao 30 a 60 cards por grupo, e o gargalo e o
+            # timeout, nao a CPU
+            # 6, nao 16: o gargalo e o timeout do ping, e cada worker
+            # bifurca um processo. Mais paralelismo nao acelera e disputa
+            # CPU com a sessao remota que estiver desenhando.
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                def _um(par):
+                    nome, _w = par
+                    cx = por_nome.get(nome)
+                    if cx is None:
+                        return nome, None
+                    return nome, pingar(cx.host)
+                # LOTE, nao um idle por maquina: 60 idle_add separados
+                # entopem o laço principal justamente quando ele precisa
+                # atender o dialogo de autenticacao do RDP.
+                lote = []
+                for nome, vivo in pool.map(_um, alvos):
+                    if vivo is None:
+                        continue
+                    lote.append((nome, vivo))
+                    if len(lote) >= 12:
+                        GLib.idle_add(self._pintar_lote, geracao, lote)
+                        lote = []
+                if lote:
+                    GLib.idle_add(self._pintar_lote, geracao, lote)
+
+        def _guardado():
+            # excecao em thread morre calada e o sintoma vira "tudo cinza",
+            # que nao distingue erro de maquina fora do ar
+            try:
+                _trabalho()
+            except Exception:
+                traceback.print_exc()
+
+        import traceback
+        threading.Thread(target=_guardado, daemon=True).start()
+        return False
+
+    def _pintar_lote(self, geracao, lote):
+        for nome, vivo in lote:
+            self._pintar_vida(geracao, nome, vivo)
+        return False
+
+    def _pintar_vida(self, geracao, nome, vivo):
+        # a lista pode ter sido reconstruida enquanto a sonda corria
+        if geracao != getattr(self, "_geracao", 0):
+            return False
+        w = self._vidas.get(nome)
+        if w is None:
+            return False
+        ctx = w.get_style_context()
+        ctx.remove_class("vida-on")
+        ctx.remove_class("vida-off")
+        ctx.add_class("vida-on" if vivo else "vida-off")
+        return False
+
+    @staticmethod
+    def _restaurar_rolagem(ajuste, pos):
+        """Devolve a posicao de rolagem quando o conteudo ficar alto o
+        bastante para aceita-la.
+
+        Nao basta um idle_add: no primeiro ciclo o _agendar_colunas ainda
+        nao recalculou as colunas, o `upper` do ajuste ainda e o do conteudo
+        pequeno e o valor pedido e CORTADO para o teto de entao — que muitas
+        vezes e zero. Era por isso que a lista voltava ao topo ao duplicar
+        mesmo com a posicao guardada.
+
+        Aqui a restauracao espera o ajuste crescer, com um numero limitado
+        de tentativas para nao virar timer eterno se o conteudo encolheu de
+        verdade (uma busca que filtrou quase tudo, por exemplo).
+        """
+        if ajuste is None or pos <= 0:
+            return
+
+        tentativas = [12]
+
+        def _voltar():
+            tentativas[0] -= 1
+            teto = max(0.0, ajuste.get_upper() - ajuste.get_page_size())
+            if teto >= pos - 1 or tentativas[0] <= 0:
+                ajuste.set_value(min(pos, teto))
+                return False
+            return True          # ainda nao cresceu: tenta de novo
+
+        GLib.timeout_add(30, _voltar)
 
     def _conta_no(self, no):
         return len(no["itens"]) + sum(self._conta_no(v)
@@ -4571,6 +5298,14 @@ class Janela(Gtk.Window):
             # segunda passada: na primeira o FlowBox ainda decide a altura
             # com a largura antiga e sobra um vazio embaixo do grupo
             GLib.idle_add(recalcular, priority=GLib.PRIORITY_LOW)
+            # OS CARDS SO NASCEM AQUI.
+            # Com os grupos recolhidos, _encher_home termina sem nenhum card
+            # criado — e a sonda disparada la nao tinha o que checar, por
+            # isso as linhas ficavam todas cinzas. A checagem tem de sair
+            # DAQUI, que e o momento em que os cards deste grupo passam a
+            # existir. Tambem e o comportamento certo: checa o grupo que
+            # voce abriu, nao as 276.
+            GLib.idle_add(self._sondar_visiveis, priority=GLib.PRIORITY_LOW)
             return False
 
         def recalcular():
@@ -4604,7 +5339,11 @@ class Janela(Gtk.Window):
         linha.pack_start(exp, True, True, 0)
         return linha
 
-    LARG_CARD = 258      # largura pedida pela moldura do card
+    # 258 -> 152: card compacto e quadrado. Com 276 maquinas, a largura
+    # antiga dava 6 colunas em 1920px; esta da 11. O quadrado sai de
+    # ALT_CARD, porque aspect-ratio nao existe no GTK3.
+    LARG_CARD = 152      # largura pedida pela moldura do card
+    ALT_CARD = 152       # altura fixa = largura: card quadrado
     ESP_CARD = 10        # column_spacing do FlowBox
     FOLGA_CARD = 4       # bordas do card + margem do FlowBoxChild
     FOLGA_ROLAGEM = 18   # barra de rolagem vertical, quando aparece
@@ -4720,6 +5459,88 @@ class Janela(Gtk.Window):
         self._perguntar_lote(nome, itens)
         return True
 
+    # ------------------------------------------------ conexao instantanea
+    def _card_efemero(self, dados, proto):
+        """Card fantasma para um destino digitado que nao esta no INI.
+
+        Reaproveita a linguagem do card normal — trilho, nome, host, icones
+        de protocolo — mas marcado como temporario. Clicar num icone pede a
+        credencial e conecta; nada e gravado."""
+        moldura = add_class(Gtk.Box(spacing=0), "card", "card-efemero")
+        # canto esquerdo, alinhado com a grade: o mouse acabou de sair da
+        # busca, que fica na esquerda — centralizar obrigaria a atravessar a
+        # tela para clicar
+        moldura.set_halign(Gtk.Align.START)
+        moldura.set_margin_start(2)
+        moldura.set_size_request(self.LARG_CARD + 60, -1)
+
+        trilho = pintar(add_class(Gtk.Box(), "trilho"), self.cor("atencao_fg"))
+        trilho.set_size_request(3, -1)
+        moldura.pack_start(trilho, False, False, 0)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        card.set_border_width(10)
+        moldura.pack_start(card, True, True, 0)
+
+        topo = Gtk.Box(spacing=6)
+        nome = rotulo(dados["host"], "card-nome")
+        nome.set_max_width_chars(22)
+        topo.pack_start(nome, True, True, 0)
+        topo.pack_end(add_class(Gtk.Label(label="TEMPORÁRIA"),
+                                "chip", "chip-atencao"), False, False, 0)
+        card.pack_start(topo, False, False, 0)
+
+        card.pack_start(rotulo("não está no conexoes.ini · vive só nesta "
+                               "sessão", "card-meta"), False, False, 0)
+
+        botoes = Gtk.Box(spacing=4, homogeneous=True)
+        botoes.set_size_request(-1, self.ALT_BOTOES)
+        for tp, dica in (("vnc", "Tela · VNC"), ("ssh", "Shell · SSH"),
+                         ("rdp", "RDP")):
+            b = Gtk.Button()
+            b.add(icone_acao(tp))
+            add_class(b, "card-ico", "card-ico-" + tp)
+            b.set_tooltip_text(dica + " — pede a senha e conecta")
+            b.connect("clicked",
+                      lambda _b, d=dict(dados), t=tp: self._conectar_efemero(d, t))
+            botoes.pack_start(b, True, True, 0)
+        card.pack_start(botoes, False, False, 6)
+        return moldura
+
+    def _conectar_efemero(self, dados, proto):
+        """Pede credencial e abre a sessao. Nada e gravado em lugar nenhum."""
+        import dialogo_ui
+
+        # o protocolo escolhido no clique manda: refaz as chaves do dict
+        for k in ("vnc", "ssh", "rdp"):
+            dados[k] = "sim" if k == proto else "nao"
+
+        campo_user = {"vnc": "usuario", "ssh": "ssh_usuario",
+                      "rdp": "rdp_usuario"}[proto]
+        campo_senha = {"vnc": "senha", "ssh": "ssh_senha",
+                       "rdp": "rdp_senha"}[proto]
+
+        # VNC costuma nao ter usuario; so pergunta quando o protocolo pede.
+        if proto in ("ssh", "rdp") and not dados.get(campo_user):
+            u = dialogo_ui.perguntar(
+                self, "Conectar a %s" % dados["host"], "USUÁRIO",
+                ok="Continuar",
+                validar=lambda t: None if t else "Informe o usuário")
+            if u is None:
+                return
+            dados[campo_user] = u
+
+        senha = dialogo_ui.perguntar(
+            self, "Conectar a %s" % dados["host"], "SENHA", senha=True,
+            ok="Conectar",
+            dica="não será salva — vive só enquanto a aba existir")
+        if senha is None:
+            return
+        dados[campo_senha] = senha
+
+        cx = conexao_efemera(dados)
+        self.abrir(cx, proto)
+
     def _card(self, cx, acento):
         moldura = add_class(Gtk.Box(spacing=0), "card")
         # Elastico simples: hexpand+FILL, e o FlowBox pai (homogeneous=True)
@@ -4728,12 +5549,22 @@ class Janela(Gtk.Window):
         # isso que nao ha risco de realimentacao/crescimento sem fim.
         moldura.set_hexpand(True)
         moldura.set_halign(Gtk.Align.FILL)
+        # quadrado: aspect-ratio nao existe no GTK3, entao a altura e pedida
+        moldura.set_size_request(-1, self.ALT_CARD)
         trilho = pintar(add_class(Gtk.Box(), "trilho"), acento)
-        trilho.set_size_request(4, -1)
+        trilho.set_size_request(3, -1)
         moldura.pack_start(trilho, False, False, 0)
 
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
-        card.set_border_width(12)
+        # SEGUNDA LINHA: vida da maquina, colada no trilho do grupo.
+        # Verde = a porta respondeu, vermelho = nao respondeu, cinza = ainda
+        # nao foi checada. Ocupa 3px de largura e nenhuma altura.
+        vida = add_class(Gtk.Box(), "trilho", "trilho-vida")
+        vida.set_size_request(3, -1)
+        moldura.pack_start(vida, False, False, 0)
+        self._vidas[cx.nome] = vida
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        card.set_border_width(10)
         moldura.pack_start(card, True, True, 0)
 
         # max_width_chars em TODOS os textos do card, sempre. Sem isso, o
@@ -4743,13 +5574,15 @@ class Janela(Gtk.Window):
         # linhas com textos mais longos ficavam mais largas que outras.
         # Travando o max_width_chars, toda linha pede a MESMA largura.
         nome_lbl = rotulo(cx.nome, "card-nome")
-        nome_lbl.set_max_width_chars(22)
+        nome_lbl.set_max_width_chars(16)
         topo = Gtk.Box(spacing=6)
 
         # Caixa de selecao para a execucao em lote. So aparece em maquina
         # com SSH configurado: o executor fala SSH, entao uma maquina
         # so-VNC ou so-RDP nao teria como participar.
-        if cx.tem_ssh:
+        # getattr com default: conexoes antigas em memoria podem nao ter o
+        # atributo se o objeto veio de outro caminho
+        if cx.tem_ssh and not getattr(cx, "efemera", False):
             marca = Gtk.CheckButton()
             add_class(marca, "marca-lote")
             marca.set_valign(Gtk.Align.CENTER)
@@ -4760,71 +5593,74 @@ class Janela(Gtk.Window):
             topo.pack_start(marca, False, False, 0)
 
         topo.pack_start(nome_lbl, True, True, 0)
-        pontos = Gtk.Box(spacing=3)
-        pontos.set_valign(Gtk.Align.CENTER)
-        for ativo, cor in ((cx.tem_vnc, self.cor("azul")),
-                           (cx.tem_ssh, self.cor("verde")),
-                           (cx.tem_rdp, self.cor("atencao_fg"))):
-            p = pintar(Gtk.Box(), cor if ativo else self.cor("borda"))
-            p.set_size_request(7, 7)
-            p.set_valign(Gtk.Align.CENTER)
-            pontos.pack_start(p, False, False, 0)
-        topo.pack_end(pontos, False, False, 0)
         card.pack_start(topo, False, False, 0)
         host_lbl = rotulo(cx.host or "sem host", "card-host")
-        host_lbl.set_max_width_chars(26)
+        host_lbl.set_max_width_chars(20)
         card.pack_start(host_lbl, False, False, 0)
 
-        # Sempre 3 linhas, mesmo "vazias" — mas uma linha REALMENTE vazia
-        # (string "") faz o Pango calcular altura MENOR pra ela: sem nenhum
-        # glifo, ele nao tem metrica de fonte pra medir, e a altura natural
-        # do bloco de texto encolhe. Um espaco simples " " resolve: tem
-        # glifo (ainda que invisivel), entao toda linha mede o mesmo,
-        # sempre. Foi por isso que a correcao anterior (com "") nao bastou.
+
+
+        # ICONES-ACAO: indicador E botao no mesmo controle.
+        #
+        # Antes o card mostrava tres pontinhos de estado E dois botoes
+        # escritos dizendo a mesma coisa. Fundindo os dois, "apagado" passa
+        # a significar exatamente uma coisa — nao configurado, logo nao
+        # clicavel — e sobra altura para o card virar quadrado.
+        #
+        # Os quatro slots aparecem SEMPRE, mesmo desligados: icone que some
+        # obriga a reler o card toda vez; posicao fixa se aprende e para de
+        # ser lida. O SFTP e sempre o quarto.
+        botoes = Gtk.Box(spacing=4, homogeneous=True)
+        botoes.set_size_request(-1, self.ALT_BOTOES)
+        botoes.set_valign(Gtk.Align.END)
+        for tp, dica in (("vnc", "Tela · VNC"), ("ssh", "Shell · SSH"),
+                         ("rdp", "RDP"), ("sftp", "Arquivos · SFTP")):
+            ligado = cx.tem_ssh if tp == "sftp" else cx.tem(tp)
+            b = Gtk.Button()
+            b.add(icone_acao(tp))
+            add_class(b, "card-ico", "card-ico-" + tp if ligado
+                      else "card-ico-off")
+            b.set_sensitive(bool(ligado))
+            b.set_tooltip_text(dica if ligado else dica + " — não configurado")
+            if ligado:
+                if tp == "sftp":
+                    b.connect("clicked", lambda _b, c=cx: self.abrir_sftp(c))
+                else:
+                    b.connect("clicked",
+                              lambda _b, c=cx, t=tp: self.abrir(c, t))
+                    # um Gtk.Button consome o clique antes de chegar ao
+                    # EventBox do card, entao o botao do meio e tratado nele
+                    b.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+                    b.connect("button-press-event", self._meio_botao, cx, tp)
+            botoes.pack_start(b, True, True, 0)
+        card.pack_end(botoes, False, False, 0)
+
+        # Meta LOGO ACIMA dos icones.
+        # Com pack_end o PRIMEIRO widget empacotado fica mais embaixo, entao
+        # os botoes vao antes e a meta depois — o inverso empilhava os
+        # icones por cima do texto.
+        #
+        # Eu tinha tirado para o card virar quadrado; a informacao e util e
+        # cabe embaixo. Continua com altura ABSOLUTA (ALT_META) e as tres
+        # linhas sempre presentes: uma linha vazia de verdade ("") faz o
+        # Pango medir MENOS — sem glifo ele nao tem metrica de fonte — e os
+        # cards ficariam de alturas diferentes. Por isso VAZIA e um espaco.
         VAZIA = " "
         linha_vnc = ("tela %s · %s%s" % (cx.porta, cx.modo,
                                          " · auto" if cx.auto else "")
-                    if cx.tem_vnc else VAZIA)
+                     if cx.tem_vnc else VAZIA)
         linha_ssh = ("ssh %s@%s%s" % (cx.ssh_usuario or "?", cx.ssh_porta,
                                       " · auto" if cx.ssh_auto else "")
-                    if cx.tem_ssh else VAZIA)
+                     if cx.tem_ssh else VAZIA)
         linha_rdp = ("rdp %s@%s · %s" % (cx.rdp_usuario or "?",
                                          cx.rdp_porta, cx.rdp_tela)
-                    if cx.tem_rdp else VAZIA)
+                     if cx.tem_rdp else VAZIA)
         meta_lbl = rotulo("\n".join((linha_vnc, linha_ssh, linha_rdp)),
                           "card-meta")
-        meta_lbl.set_max_width_chars(28)
-        # Altura ABSOLUTA do bloco de meta. Depender da metrica do Pango
-        # (mesmo com 3 linhas garantidas) ainda deixa variacao de 1-2px
-        # conforme os glifos de cada linha — travando em pixels, todo card
-        # mede exatamente igual, independente de conteudo.
+        meta_lbl.set_max_width_chars(22)
         meta_lbl.set_size_request(-1, self.ALT_META)
-        meta_lbl.set_valign(Gtk.Align.START)
-        card.pack_start(meta_lbl, False, False, 2)
-
-        # A linha de botoes e a SEGUNDA fonte de variacao de altura que
-        # faltava tratar: um card so-RDP tem 1 botao (.secundaria) e um
-        # VNC+SSH tem 2 (.acao + .secundaria) — e essas classes tem padding
-        # diferente no CSS, logo alturas naturais diferentes. Travando a
-        # altura da linha inteira, o numero e o tipo de botao deixam de
-        # influenciar a altura final do card.
-        botoes = Gtk.Box(spacing=5, homogeneous=True)
-        botoes.set_size_request(-1, self.ALT_BOTOES)
-        for rot, tp, classe in (("Tela", "vnc", "acao"),
-                                ("Shell", "ssh", "secundaria"),
-                                ("RDP", "rdp", "secundaria")):
-            if not cx.tem(tp):
-                continue
-            b = add_class(Gtk.Button(label=rot), classe)
-            b.connect("clicked", lambda _b, c=cx, t=tp: self.abrir(c, t))
-            # um Gtk.Button consome o clique antes de chegar ao EventBox do
-            # card, entao o botao do meio precisa ser tratado nele mesmo —
-            # e aqui fica ate melhor: abre exatamente aquele servico.
-            b.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-            b.connect("button-press-event", self._meio_botao, cx, tp)
-            b.set_tooltip_text("%s · clique do meio abre em segundo plano" % rot)
-            botoes.pack_start(b, True, True, 0)
-        card.pack_start(botoes, False, False, 5)
+        meta_lbl.set_valign(Gtk.Align.END)
+        card.pack_end(meta_lbl, False, False, 0)
 
         # clique do meio em qualquer ponto vazio do card
         ev = add_class(Gtk.EventBox(), "evt")
@@ -4940,13 +5776,22 @@ class Janela(Gtk.Window):
         if not hasattr(self, "hero_caixa"):
             return False
         for f in self.hero_caixa.get_children():
-            self.hero_caixa.remove(f)
+            f.destroy()
         h = self._hero()
         self.hero_caixa.pack_start(h, True, True, 0)
         self.hero_caixa.show_all()
         return False
 
     def _trocou_aba(self, _nb, pagina, _num):
+        # Voltar para o painel com um gtk_grab pendente deixava a lista
+        # inteira sem responder a clique: o grab e interno a aplicacao e
+        # entrega TODOS os eventos a um widget so. Sessoes que capturam
+        # teclado (VNC/RDP) podem deixar esse grab para tras ao perder o
+        # foco, e o sintoma era "abri RDP, voltei pra lista e nao clica".
+        if pagina is self.home:
+            liberar_grab_gtk()
+            GLib.idle_add(self._despertar_cards)
+
         for aba in self.abas.values():
             if aba is pagina:
                 if hasattr(aba, "redesenhar"):
@@ -5342,8 +6187,10 @@ class Janela(Gtk.Window):
         cab = Gtk.Box(spacing=5)
         cab.set_size_request(-1, self.ALTURA_ABA)
         cab.set_tooltip_text("Clique do meio fecha esta aba")
-        cab.pack_start(add_class(Gtk.Label(label=tipo.upper()),
-                                 "aba-tipo", "aba-" + tipo), False, False, 0)
+        # "aba-cab" + "aba-<tipo>-t" desenham o trilho de 2px da aba ativa;
+        # quem liga o trilho e o seletor "tab:checked .aba-cab" no tema
+        add_class(cab, "aba-cab", "aba-" + tipo + "-t")
+        cab.pack_start(selo_protocolo(tipo), False, False, 0)
         lb = Gtk.Label(label=cx.nome)
         lb.set_ellipsize(Pango.EllipsizeMode.NONE)
         lb.set_max_width_chars(28)
@@ -5852,8 +6699,8 @@ class Janela(Gtk.Window):
         self.abas["::lote"] = aba
         cab = Gtk.Box(spacing=5)
         cab.set_size_request(-1, self.ALTURA_ABA)
-        cab.pack_start(add_class(Gtk.Label(label="LOTE"), "aba-tipo",
-                                 "aba-ssh"), False, False, 0)
+        add_class(cab, "aba-cab", "aba-massa-t")
+        cab.pack_start(selo_protocolo("massa"), False, False, 0)
         lb = Gtk.Label(label="%d máquinas" % len(alvos))
         add_class(lb, "aba-nome")
         cab.pack_start(lb, False, False, 0)
@@ -5883,8 +6730,8 @@ class Janela(Gtk.Window):
             self.abas["::sftp"] = aba
             cab = Gtk.Box(spacing=5)
             cab.set_size_request(-1, self.ALTURA_ABA)
-            cab.pack_start(add_class(Gtk.Label(label="📁"), "aba-tipo",
-                                     "aba-ssh"), False, False, 0)
+            add_class(cab, "aba-cab", "aba-sftp-t")
+            cab.pack_start(selo_protocolo("sftp"), False, False, 0)
             lb = Gtk.Label(label="Arquivos")
             add_class(lb, "aba-nome")
             cab.pack_start(lb, False, False, 0)
@@ -6041,6 +6888,82 @@ class Janela(Gtk.Window):
         self._popular()
         self._encher_home()
         self.lb_conta.set_text("%d máquinas" % len(self.conexoes))
+
+    # ---------------------------------------------------------- ajustes
+    def _abrir_ajustes(self, _b=None):
+        """Painel de ajustes. Usa os blocos do dialogo_ui — nada montado a
+        mao aqui, senao a proxima tela nasce fora do padrao outra vez."""
+        import dialogo_ui
+        dlg, cx, _ok = dialogo_ui.editor(
+            # sem botao de acao: o X da barra fecha, e cada opcao ja se
+            # aplica no momento em que voce mexe nela
+            "Ajustes", self, ok=None, cancelar=None,
+            largura=560, altura=430)
+
+        # ---- diagnostico
+        dialogo_ui.secao(cx, "DIAGNÓSTICO", primeira=True)
+        dialogo_ui.interruptor(
+            cx, "Painel de diagnóstico nas abas (F12)", self.mostrar_log,
+            # espelha o ToggleButton, que segue sendo a fonte da verdade e o
+            # alvo do F12 — assim o estado nao existe em dois lugares
+            lambda ativo: self.bt_log.set_active(ativo),
+            "Mostra o log da sessão dentro de cada aba. Útil para entender "
+            "uma conexão que cai.")
+
+        # ---- local dos arquivos
+        dialogo_ui.secao(cx, "LOCAL DOS ARQUIVOS")
+        lb_atual = rotulo(dir_dados(), "opcao-txt")
+        lb_atual.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        cx.pack_start(lb_atual, False, False, 0)
+        dialogo_ui.nota(
+            cx, "conexoes.ini, snippets.ini e histórico ficam aqui. "
+                "Apontando para uma pasta sincronizada, o backup passa a "
+                "ser automático.", "dlg-dica")
+
+        aviso = rotulo("", "dlg-dica", ellipsize=None)
+        aviso.set_line_wrap(True)
+
+        def _aplicar(destino):
+            try:
+                novo_dir, copiados = mover_dados_para(destino)
+            except Exception as e:
+                add_class(aviso, "dlg-dica-erro")
+                aviso.set_text("Não foi possível usar essa pasta: %s" % e)
+                return
+            lb_atual.set_text(novo_dir)
+            aviso.get_style_context().remove_class("dlg-dica-erro")
+            aviso.set_text(
+                ("Pasta vazia: %s copiado(s) para lá. " % ", ".join(copiados)
+                 if copiados else "A pasta já tinha os arquivos. ")
+                + "Reinicie o Acessos para passar a usar o novo local.")
+
+        def _escolher():
+            esc = Gtk.FileChooserDialog(
+                title="Pasta dos arquivos do Acessos", transient_for=dlg,
+                action=Gtk.FileChooserAction.SELECT_FOLDER)
+            esc.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+            esc.add_button("Usar esta pasta", Gtk.ResponseType.OK)
+            add_class(esc, "acessos-dialogo")
+            try:
+                esc.set_current_folder(dir_dados())
+            except Exception:
+                pass
+            resp = esc.run()
+            destino = esc.get_filename() if resp == Gtk.ResponseType.OK else None
+            esc.destroy()
+            if destino:
+                _aplicar(destino)
+
+        dialogo_ui.linha_botoes(cx, [
+            ("Escolher pasta…", "acao", _escolher),
+            ("Voltar ao padrão", "secundaria",
+             lambda: _aplicar(_dir_padrao())),
+        ])
+        cx.pack_start(aviso, False, False, 0)
+
+        dlg.show_all()
+        dlg.run()
+        dlg.destroy()
 
     def _editar_ini(self, _b=None):
         # NO WINDOWS a URI montada a mao nao serve: "file://" +
@@ -6227,7 +7150,7 @@ def main():
 
     # o dialogo do cofre e a PRIMEIRA janela a aparecer; sem a folha de
     # estilo instalada aqui, ele sairia com o tema do sistema
-    instalar_css_cedo(ler_tema(caminho), ler_fonte_grande(caminho))
+    instalar_css_cedo(ler_tema(caminho))
 
     # COFRE ANTES DE CARREGAR: carregar() decifra os campos sigilosos
     # usando o cofre global, entao ele precisa estar aberto aqui. Sem

@@ -13,3 +13,9 @@ __pycache__/
 # manuais de instalação feitos aqui.
 .estado_patch.json
 .backup_anterior/
+
+# Scratch de trabalho ao portar atualizações do Linux (tarball recebido +
+# extração + diffs + backups de referência) — nunca é o repositório, só um
+# rascunho local pra comparar as duas versões durante o porte.
+.linux_novo/
+acessos.tar
