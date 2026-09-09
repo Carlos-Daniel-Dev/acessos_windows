@@ -422,11 +422,18 @@ CONF_EXEMPLO = """\
 # (Ctrl+W, Ctrl+T, F1-F12), e o menu de teclas injeta Ctrl+Alt+Del e afins.
 #
 # x11 = 0 inverte a troca: captura total de teclado, RDP em janela separada.
+
+# massa_ativa = 0 (padrao) mantem a execucao em lote (aba LOTE, botao
+# "executar", "Detectar plataforma") DESLIGADA. E um recurso que dispara
+# comandos por SSH em varias maquinas de uma vez — fica fora por padrao
+# numa instalacao nova, ligue trocando por 1 quando a equipe estiver
+# pronta pra usar. Precisa reabrir o Acessos depois de mudar.
 [geral]
-painel  = 240
-lateral = 1
-tema    = claro
-x11     = 1
+painel      = 240
+lateral     = 1
+tema        = claro
+x11         = 1
+massa_ativa = 0
 
 [PDV 001]
 grupo       = Loja 06;Caixas
@@ -4312,6 +4319,11 @@ class Janela(Gtk.Window):
         if self.tema not in TEMAS:
             self.tema = "claro"
         self.fonte_grande = verdade(geral.get("fonte_grande", ""), False)
+        # execucao em lote: vem OFF por padrao (ver comentario no
+        # CONF_EXEMPLO) — so liga se a equipe mudar massa_ativa pra 1 no
+        # conexoes.ini. TEM_MASSA continua indicando se o MODULO carregou;
+        # este flag e a decisao de POLITICA, separada da capacidade.
+        self.massa_ativa = verdade(geral.get("massa_ativa", ""), False)
         self.prov = Gtk.CssProvider()
 
         self.set_default_size(1340, 840)
@@ -5757,7 +5769,7 @@ class Janela(Gtk.Window):
         """O botao de lote so existe quando ha o que executar."""
         n = len(self.selecionados)
         if hasattr(self, "bt_lote"):
-            self.bt_lote.set_sensitive(n > 0 and TEM_MASSA)
+            self.bt_lote.set_sensitive(n > 0 and TEM_MASSA and self.massa_ativa)
             self.bt_lote.set_label("⚡  executar (%d)" % n if n
                                    else "⚡  executar")
         if hasattr(self, "lb_selecao"):
@@ -6120,7 +6132,7 @@ class Janela(Gtk.Window):
         item("Copiar host", lambda: Gtk.Clipboard.get(
             Gdk.SELECTION_CLIPBOARD).set_text(cx.host, -1))
         item("Detectar plataforma", lambda: self.detectar_plataforma([cx]),
-             TEM_MASSA)
+             TEM_MASSA and self.massa_ativa)
         menu.append(Gtk.SeparatorMenuItem())
         item("Editar…", lambda: self.editar_conexao(cx))
         item("Duplicar…", lambda: self.duplicar_conexao(cx))
@@ -6687,11 +6699,26 @@ class Janela(Gtk.Window):
         dlg.run()
         dlg.destroy()
 
+    def _avisar_massa_desativada(self):
+        """Recurso presente e funcional, so desligado por padrao (ver
+        massa_ativa no CONF_EXEMPLO) — mensagem diferente da de "modulo
+        ausente" porque aqui a solucao e editar o .ini, nao reinstalar."""
+        self.avisar(
+            "Execução em lote desativada",
+            "Este recurso vem desligado por padrão numa instalação nova.\n\n"
+            "Para ativar: feche o Acessos, abra o conexoes.ini e troque\n"
+            "massa_ativa por 1 na seção [geral]:\n\n"
+            "    [geral]\n    massa_ativa = 1\n\n"
+            "Depois abra o Acessos de novo.")
+
     def abrir_lote(self, _b=None):
         if not TEM_MASSA:
             self.avisar("Motor ausente",
                         "O arquivo massa.py precisa estar ao lado do "
                         "acessos.py.\n\n" + ERRO_MASSA)
+            return
+        if not self.massa_ativa:
+            self._avisar_massa_desativada()
             return
         # O massa.py importa mesmo sem paramiko — quem falha e a CONEXAO,
         # host por host. Sem esta checagem antecipada o operador so
@@ -6783,6 +6810,9 @@ class Janela(Gtk.Window):
             self.avisar("Motor ausente",
                         "O arquivo massa.py precisa estar ao lado do "
                         "acessos.py.\n\n" + ERRO_MASSA)
+            return
+        if not self.massa_ativa:
+            self._avisar_massa_desativada()
             return
         alvos = [c for c in conexoes if c.host]
         if not alvos:
