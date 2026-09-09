@@ -19,6 +19,12 @@
 #     .\instalar.ps1 -SemRdp        pula a checagem do FreeRDP (avisa e segue)
 #     .\instalar.ps1 -Verificar     so testa o que ja esta instalado
 #     .\instalar.ps1 -Remover       desinstala (preserva a configuracao)
+#     .\instalar.ps1 -Remover -LimparConfig
+#                                   desinstala E apaga conexoes.ini, cofre,
+#                                   historico/ e snippets — pede confirmacao
+#                                   explicita antes (perda de dados real e
+#                                   irreversivel, nao ha "historico/" que
+#                                   salve depois disto)
 #
 #  Sem WSL, sem container, sem Store. Instala no perfil do usuario, sem
 #  precisar de admin — a UNICA parte que pode pedir elevacao e o instalador
@@ -28,7 +34,8 @@
 param(
     [switch]$SemRdp,
     [switch]$Verificar,
-    [switch]$Remover
+    [switch]$Remover,
+    [switch]$LimparConfig
 )
 
 $ErrorActionPreference = "Stop"
@@ -146,11 +153,93 @@ function Nota($t) { Write-Host "       $t" -ForegroundColor Gray }
 function Erro($t) { Write-Host "ERRO: $t" -ForegroundColor Red }
 
 # --------------------------------------------------------------- remover
+#
+# A pasta de configuracao (conexoes.ini, cofre, historico/, snippets.ini)
+# fica FORA de $Destino de proposito — e' dado do usuario, nao parte do
+# programa, e o padrao de -Remover sempre foi preserva-la. -LimparConfig
+# e' o oposto explicito disso: so apaga com confirmacao digitada, porque
+# nao ha como desfazer (nem o historico/, que existe justamente pra
+# recuperar erros de edicao, sobrevive a isto).
+#
+# Mesma conta que _dir_padrao()/_ler_caminho_geral() fazem em acessos.py:
+# XDG_CONFIG_HOME (ou ~/.config) + "acessos" e' o lugar padrao, que pode
+# conter uma chave [geral] caminho= apontando a pasta de dados de verdade
+# (recurso de "pasta de dados relocavel") — se houver, as DUAS pastas
+# precisam ser apagadas, senao "limpar" deixa a metade dos dados para tras.
+function Obter-PastaConfigPadrao {
+    $base = $env:XDG_CONFIG_HOME
+    if ([string]::IsNullOrWhiteSpace($base)) {
+        $base = Join-Path $env:USERPROFILE ".config"
+    }
+    return Join-Path $base "acessos"
+}
+
+function Obter-PastaRelocada([string]$iniPadrao) {
+    # leitura crua do "[geral]\ncaminho = ..." — mesmo dado que
+    # _ler_caminho_geral() le em acessos.py, sem depender de nenhum parser
+    if (-not (Test-Path $iniPadrao)) { return $null }
+    $dentroDeGeral = $false
+    foreach ($linha in Get-Content -Path $iniPadrao -Encoding UTF8) {
+        $l = $linha.Trim()
+        if ($l -match '^\[(.+)\]$') {
+            $dentroDeGeral = ($Matches[1].Trim().ToLower() -eq "geral")
+            continue
+        }
+        if ($dentroDeGeral -and $l -match '^caminho\s*=\s*(.+)$') {
+            $valor = $Matches[1].Trim()
+            if ($valor) { return [System.Environment]::ExpandEnvironmentVariables($valor) }
+        }
+    }
+    return $null
+}
+
 function Remover-Tudo {
     Azul "Removendo"
     if (Test-Path $Destino) { Remove-Item -Recurse -Force $Destino }
     if ($MenuAtalho -and (Test-Path $MenuAtalho)) { Remove-Item -Force $MenuAtalho }
-    Ok "removido. A configuração em %APPDATA%\acessos foi preservada."
+
+    $pastaConfig = Obter-PastaConfigPadrao
+    if (-not $LimparConfig) {
+        Ok "removido. A configuração em $pastaConfig foi preservada."
+        Nota "Use -Remover -LimparConfig para apagar também conexões, cofre e histórico."
+        return
+    }
+
+    $iniPadrao = Join-Path $pastaConfig "conexoes.ini"
+    $pastaRelocada = Obter-PastaRelocada $iniPadrao
+    $alvos = [System.Collections.Generic.List[string]]::new()
+    $alvos.Add($pastaConfig)
+    if ($pastaRelocada -and (Test-Path $pastaRelocada) -and
+        ((Resolve-Path $pastaRelocada).Path -ne (Resolve-Path $pastaConfig -ErrorAction SilentlyContinue).Path)) {
+        $alvos.Add($pastaRelocada)
+    }
+    $existentes = @($alvos | Where-Object { Test-Path $_ })
+
+    if (-not $existentes) {
+        Ok "removido. Nenhuma pasta de configuração encontrada para apagar."
+        return
+    }
+
+    Write-Host ""
+    Write-Host "ATENÇÃO — isto apaga PERMANENTEMENTE, sem volta:" -ForegroundColor Yellow
+    foreach ($p in $existentes) {
+        Write-Host "  $p" -ForegroundColor Yellow
+    }
+    Write-Host "  - conexoes.ini: TODAS as máquinas cadastradas e seus ajustes" -ForegroundColor Yellow
+    Write-Host "  - cofre: a senha mestra e qualquer credencial guardada nele" -ForegroundColor Yellow
+    Write-Host "  - historico/: os backups automáticos (não salva desta vez)" -ForegroundColor Yellow
+    Write-Host "  - snippets.ini: os comandos salvos da execução em lote" -ForegroundColor Yellow
+    Write-Host ""
+    $resposta = Read-Host "Digite APAGAR (tudo maiúsculo) para confirmar, ou qualquer outra coisa para cancelar"
+    if ($resposta -ne "APAGAR") {
+        Nota "Cancelado — a configuração NÃO foi apagada."
+        return
+    }
+
+    foreach ($p in $existentes) {
+        Remove-Item -Recurse -Force $p -Confirm:$false
+    }
+    Ok "removido, incluindo a configuração ($($existentes.Count) pasta(s))."
 }
 
 # ------------------------------------------------------------ verificar
