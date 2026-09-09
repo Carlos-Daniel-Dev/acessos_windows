@@ -424,3 +424,15 @@ nova. Nova chave `massa_ativa` na seção `[geral]` do `conexoes.ini`
 edite o `.ini` e reabra. `TEM_MASSA` continua indicando só se o módulo
 (`massa.py`/`massa_ui.py`) está presente; `massa_ativa` é a decisão de
 política, separada da capacidade.
+
+## Desinstalador ganha `-LimparConfig` (2026-09-09)
+
+`instalar.ps1 -Remover` sempre preservou a pasta de configuração
+(`~/.config/acessos` — `conexoes.ini`, cofre, `historico/`,
+`snippets.ini`), por padrão continua assim. Quem quiser desinstalar
+E apagar tudo agora tem `.\instalar.ps1 -Remover -LimparConfig`:
+mostra exatamente o que vai ser apagado (inclusive a pasta relocada,
+se `[geral] caminho=` estiver apontando pra outro lugar) e só apaga
+depois de o usuário digitar `APAGAR` — não há confirmação automática
+nem `-Forcar`, de propósito, porque não existe *undo* pra isso (nem o
+`historico/`, que normalmente é a rede de segurança, sobrevive).
