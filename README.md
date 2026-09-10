@@ -42,6 +42,8 @@ Duas formas, dependendo de quem você é:
 
 ## Licença
 
-[MIT](LICENSE) — mesma licença do projeto original.
+[GNU GPLv3](LICENSE) — mesma licença do projeto original. Este porte não é
+um projeto independente: é uma adaptação do Acessos original para Windows,
+e segue coberto pelos mesmos termos.
 
-Desenvolvido por @JJMoratelli.
+Copyright (C) 2026 Jurandir Moratelli.
