@@ -584,8 +584,7 @@ function Instalar-Aplicacao {
     $modulos = @("acessos.py", "vncwidget.py", "sftp.py", "cofre.py", "tema.py",
                  "rdp_windows.py", "ssh_windows.py", "win_embed.py",
                  "conpty.py", "bandeja_windows.py", "atualizador.py",
-                 "dialogo_ui.py", "massa.py", "massa_ui.py",
-                 "importar_rdm.py")
+                 "dialogo_ui.py", "massa.py", "massa_ui.py")
     foreach ($m in $modulos) {
         $origem = Join-Path $Aqui "python\$m"
         if (Test-Path $origem) {
