@@ -710,3 +710,67 @@ usuário (`compilar_exe.ps1`/`publicar.ps1`), fora desta sessão. Marca o
 fim do backlog de empacotamento (Itens 1-5) e do porte das atualizações
 do Linux (Item 6) com as 4 pendências de teste do Item 7 fechadas —
 próximas mudanças entram como releases `1.x` normais.
+
+## Item 8 — RDP embutido de verdade: shim contra libfreerdp (2026-09-11)
+
+**Motivação**: `rdp_windows.py` hoje abre `wfreerdp.exe` como PROCESSO
+EXTERNO e reparenta a janela dele (`SetParent`) — "parece um app a
+parte" (queixa levantada pelo usuário) e ainda exige embutir os ~84MB/
+91 DLLs de dependência do FreeRDP no bundle. Uma tentativa anterior de
+resolver os dois problemas via `mstscax.dll` (ActiveX nativo do
+Windows) travou sem conseguir nem iniciar uma sessão (ver histórico —
+essa pesquisa foi desfeita num rollback antes desta, mas o resultado
+prático foi "não avançou").
+
+**Desta vez, tentado o caminho direto: linkar `libfreerdp3`/`libwinpr3`
+via shim em C**, exatamente como `vncshim.c` já faz com `libvncclient`
+— a razão de existir é a mesma (a struct de configuração do FreeRDP
+também varia por build; o próprio FreeRDP 3.x já evita expor `rdpSettings`
+direto, preferindo `freerdp_settings_set_*(id)` por chave nomeada, o
+que facilitou o shim em vez de dificultar).
+
+**Resultado: MUITO mais longe do que o `mstscax.dll` chegou.** Escrito
+`rdpshim.c` (headers de dev via `mingw-w64-x86_64-freerdp`, já instalado
+no MSYS2 — `freerdp-client3`/`freerdp3`/`winpr3` via pkg-config), com a
+mesma API enxuta do `vncshim.c` (`rs_criar`, `rs_conectar`, `rs_esperar`,
+`rs_processar`, `rs_framebuffer`, `rs_tecla`, `rs_ponteiro`, `rs_destruir`).
+Testado contra RDP habilitado no próprio `localhost` (fora de produção):
+**handshake completo de rede — TCP conecta, TLS negocia, NLA/CredSSP
+tenta autenticar** — com uma senha errada de propósito, o servidor
+respondeu "Logon failed" (código `0x00020014`) corretamente propagado
+pelo callback `ao_desconectar`. A pilha de rede funciona de ponta a
+ponta; só não foi confirmada uma sessão que autentica com sucesso
+(exigiria criar um usuário Windows de teste, que pede admin — não
+disponível nesta sessão).
+
+**Dois bugs reais encontrados e corrigidos no caminho**:
+1. **Auto-atribuição em `PreConnect`**: uma linha lia
+   `freerdp_settings_get_string(FreeRDP_ServerHostname)` e regravava o
+   resultado no mesmo campo — `set_string` libera o ponteiro antigo
+   antes de copiar, e o "antigo" era o mesmo que tinha acabado de ler.
+   Sintoma: `getaddrinfo()` falhava até pra IP literal (`127.0.0.1`).
+2. **Faltava `WSAStartup()`**: Winsock não se inicializa por conta
+   própria no Windows — todo cliente FreeRDP "de verdade" (`wfreerdp.exe`
+   incluso) chama isso no `main()`; uma DLL chamada via ctypes não tem
+   `main()`, então precisa chamar explicitamente. Sem isso, `getaddrinfo()`
+   falha pra QUALQUER host com um sintoma enganoso de "erro de DNS".
+   Também precisou de `WIN32_LEAN_AND_MEAN` antes de `winsock2.h` — sem
+   isso, `windows.h` traz `shellapi.h`, cujas macros `NIIF_*` colidem
+   com os enums de mesmo nome em `freerdp/rail.h`.
+
+**O que falta pra virar produção** (nenhum destes é um bloqueio
+conhecido, só trabalho ainda não feito):
+- Confirmar uma sessão que autentica com sucesso e chega a pintar o
+  `gdi->primary_buffer` (só testado até a rejeição de credencial)
+- Mapear teclado (VK do GTK → scancode PS/2 que
+  `freerdp_input_send_keyboard_event` espera — reaproveitar a tabela
+  que `ssh_windows.py`/`conpty.py` já têm) e mouse (`PTR_FLAGS_*`)
+- Integrar num widget GTK nos moldes do `vncwidget.py` (Cairo lendo
+  `rs_framebuffer()` direto), substituindo `rdp_windows.py`/`win_embed.py`
+- Decidir o que fazer com os canais dinâmicos que o `wfreerdp.exe` de
+  hoje usa (clipboard, redirecionamento de unidade) — de fora desta
+  primeira versão de propósito
+
+`rdpshim.c` e o script de teste isolado ficaram fora do repositório
+(scratch de investigação, ainda não integrado) — retomar quando a
+integração completa (Python + GTK + input) for priorizada.
