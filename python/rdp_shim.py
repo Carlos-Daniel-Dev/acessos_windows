@@ -22,17 +22,19 @@ de acessos.py:
 
 O QUE FICOU DE FORA, DE PROPOSITO (igual ao rdp_windows.py antes)
 -------------------------------------------------------------------
-- Captura total de teclado: sem equivalente aqui ainda (era
-  SetWindowsHookEx no rdp_windows.py também — nunca foi portado). Botão
-  ⌨ desabilitado com tooltip explicando.
-- Canais dinâmicos (clipboard, redirecionamento de unidade/impressora):
-  o rdpshim.c de hoje só faz tela + teclado + mouse. `rdp_extras`
-  (opções cruas do xfreerdp no Linux) não se aplica aqui — não há linha
-  de comando, é tudo via freerdp_settings_set_*() no shim.
+- Canais dinâmicos de arquivo/impressora: o rdpshim.c de hoje cobre
+  tela + teclado + mouse + clipboard de texto + certificado + resize
+  dinâmico (mesmo conjunto do fork Linux). `rdp_extras` (opções cruas
+  do xfreerdp no Linux) não se aplica aqui — não há linha de comando,
+  é tudo via freerdp_settings_set_*() no shim.
 - `rdp_tela` = janela/cheia (modo janela separada do FreeRDP): não existe
   mais "janela separada" — a sessão SEMPRE desenha dentro da aba. Só
   "dinamico" (tamanho segue o palco) faz sentido aqui; os outros dois
   valores são tratados como "dinamico" também, silenciosamente.
+
+Captura total de teclado: agora existe via RdpWidget.set_keyboard_grab()
+(Gdk.Seat.grab do teclado inteiro, mesmo padrão do VncWidget) — o botão
+⌨ liga/desliga isso, não é mais um recurso pendente.
 """
 
 import sys
@@ -72,18 +74,17 @@ def construir(base, capturateclado=None, **utilitarios):
             self.bt_teclado = Gtk.ToggleButton(label="⌨")
             add_class(self.bt_teclado, "tog", "tog-ok", "tog-glifo")
             self.bt_teclado.set_tooltip_text(
-                "Captura total de teclado ainda não portada. Use os "
-                "atalhos padrão do sistema por enquanto.")
-            self.bt_teclado.set_sensitive(False)
+                "Capturar todas as teclas (inclusive combinações do "
+                "sistema, ex.: Alt+Tab) e enviar para a máquina remota.")
+            self.bt_teclado.connect("toggled", self._on_bt_teclado)
             self.barra.pack_end(self.bt_teclado, False, False, 0)
 
             self.palco = rdpwidget.RdpWidget()
             self.palco.set_hexpand(True)
             self.palco.set_vexpand(True)
-            self.palco.connect("rdp-connected", self._on_conectado)
-            self.palco.connect("rdp-initialized", self._on_iniciado)
-            self.palco.connect("rdp-disconnected", self._on_desconectado)
-            self.palco.connect("rdp-error", self._on_erro)
+            self.palco.connect("rdp-conectado", self._on_conectado)
+            self.palco.connect("rdp-desconectado", self._on_desconectado)
+            self.palco.connect("rdp-erro", self._on_erro)
             self.pack_start(self.palco, True, True, 0)
             if hasattr(self, "_iniciar_captura"):
                 self._iniciar_captura()
@@ -114,21 +115,18 @@ def construir(base, capturateclado=None, **utilitarios):
             return True
 
         def _conectar_agora(self):
-            al = self.palco.get_allocation()
-            larg = al.width if al.width > 1 else 1024
-            alt = al.height if al.height > 1 else 768
-
             self._estado("AGUARDE", "neutro", "abrindo %s…" % self.cx.host)
-            self.reg("conectando em %s:%s (%dx%d)"
-                     % (self.cx.host, self.cx.rdp_porta, larg, alt))
+            self.reg("conectando em %s:%s" % (self.cx.host, self.cx.rdp_porta))
 
+            # Sem largura/altura: o tamanho inicial e todo redimensionamento
+            # depois disso seguem sozinhos a alocacao da aba (canal Display
+            # Control, ver rdpwidget.py::_realocou/_agendar_resize).
             self.palco.conectar(
                 self.cx.host, int(self.cx.rdp_porta),
                 usuario=self.cx.rdp_usuario or None,
                 senha=self.cx.rdp_senha or None,
                 dominio=self.cx.rdp_dominio or None,
-                largura=larg, altura=alt,
-                ignorar_certificado=True)
+                escalar=True)
 
         # ---- vindos do RdpWidget (já na thread principal — ver
         # rdpwidget.py, os sinais só disparam via GLib.idle_add)
@@ -136,10 +134,17 @@ def construir(base, capturateclado=None, **utilitarios):
             self._estado("ATIVO", "ok", self.cx.host)
             self.sucesso()
 
-        def _on_iniciado(self, _w):
-            self.reg("tela pronta")
+        def _on_bt_teclado(self, botao):
+            ligado = botao.get_active()
+            self.palco.set_keyboard_grab(ligado)
+            self.reg("captura total de teclado %s"
+                     % ("ligada" if ligado else "desligada"))
 
         def _on_desconectado(self, _w):
+            # A sessao ja soltou o grab de teclado sozinha (rdpwidget.py::
+            # desconectar chama _soltar_seat); so falta refletir isso no
+            # botao, senao ele fica "ligado" sem efeito nenhum.
+            self.bt_teclado.set_active(False)
             if self.fechando:
                 return
             self._estado("ENCERRADO", "neutro", "sessão finalizada")

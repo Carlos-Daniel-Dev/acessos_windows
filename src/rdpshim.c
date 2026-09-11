@@ -1,59 +1,131 @@
-/* rdpshim.c — ponte estavel entre Python (ctypes) e libfreerdp/libwinpr.
+/* rdpshim.c — ponte estavel entre Python (ctypes) e libfreerdp3.
  *
  * POR QUE ESTE ARQUIVO EXISTE
  * ---------------------------
- * Mesma razao do vncshim.c: rdpContext/rdpSettings tem forma que muda por
- * build/versao — e por isso o proprio FreeRDP 3.x ja NAO deixa ler/escrever
- * a struct rdpSettings direto, so via freerdp_settings_set_*(id) com um ID
- * nomeado (FreeRDP_ServerHostname, FreeRDP_Username...). O unico "chute" de
- * layout que ainda fazemos e o de MeuContexto, e esse e seguro: o proprio
- * FreeRDP garante isso por contrato — rdpContext PRECISA ser o primeiro
- * campo (e o unico requisito), o resto do tamanho e informado por nos via
- * instance->ContextSize antes de freerdp_context_new() alocar.
+ * Mesma razao do vncshim.c: falar com a libfreerdp direto do ctypes exigiria
+ * replicar structs como rdpSettings/rdpContext/rdpGdi, cujo layout depende de
+ * flags de compilacao e de versao. Este shim inclui os headers de verdade,
+ * entao o compilador calcula os offsets certos para a lib desta maquina. O
+ * Python so enxerga as funcoes simples daqui.
  *
- * O QUE ISTO SUBSTITUI
- * ---------------------
- * Antes: rdp_windows.py abria wfreerdp.exe como PROCESSO EXTERNO e
- * reparentava a janela dele (SetParent, ver win_embed.py) dentro da nossa.
- * Aqui: linkamos libfreerdp/libwinpr direto, igual o vncshim.c ja faz com
- * libvncclient — o RDP passa a desenhar num framebuffer nosso (gdi->
- * primary_buffer), sem processo externo, sem janela pra reparentar.
+ * BASE DO QUE FOI PORTADO
+ * ------------------------
+ * A logica de conexao, o pipeline grafico (gdi_init) e o tratamento de
+ * certificado foram portados do gtk-frdp (frdp-session.c), que ja usavamos
+ * embutido via GObject Introspection. Aqui e a MESMA logica, sem a casca
+ * GObject/GTK: nos falamos com libfreerdp diretamente, do jeito que o
+ * Remmina e o proprio gtk-frdp fazem por baixo.
  *
- * ESCOPO DESTA PRIMEIRA VERSAO: tela + teclado + mouse. Sem clipboard, sem
- * redirecionamento de unidade/impressora, sem audio — esses sao canais
- * dinamicos (drdynvc) que podem entrar depois se fizerem falta.
+ * O laco de eventos usa freerdp_get_event_handles / WaitForMultipleObjects /
+ * freerdp_check_event_handles, disparado por uma thread Python (a mesma
+ * ideia do vs_esperar/vs_processar do VNC): esperar aqui, processar aqui,
+ * avisar o Python so quando ha area suja para desenhar.
+ *
+ * CERTIFICADO
+ * -----------
+ * SEM IgnoreCertificate — de proposito. Essa flag faz a libfreerdp aceitar
+ * qualquer certificado calada, sem chamar nenhum dos hooks abaixo; e um
+ * bypass total, nao uma pergunta. O pedido aqui foi o oposto: uma
+ * confirmacao estilo SSH ("a autenticidade do host nao pode ser
+ * verificada..."), tanto para certificado NOVO quanto para MUDADO — a
+ * decisao de aceitar e SEMPRE devolvida ao Python (hook_certificado_novo/
+ * hook_certificado_mudou chamam ao_certificado_novo/ao_certificado_mudou e
+ * esperam a resposta antes de prosseguir o handshake). Testado contra host
+ * real removendo o .pem salvo em ~/.config/freerdp/server: o callback
+ * dispara normalmente sem a flag.
+ *
+ * O armazenamento do certificado aceito fica a cargo da propria libfreerdp,
+ * no mesmo diretorio (~/.config/freerdp/server no Linux; equivalente do
+ * Windows sob %APPDATA%\freerdp\server — a propria libfreerdp decide),
+ * do jeito que o gtk-frdp ja deixava.
+ *
+ * PORTABILIDADE WINDOWS (2026-09) — arquivo UNICO pros dois sistemas,
+ * blocos #ifdef _WIN32 isolando so o que realmente muda:
+ *   1. Winsock precisa de WSAStartup() explicito (nao existe no Linux);
+ *   2. mutex do clipboard: CRITICAL_SECTION no lugar de pthread_mutex_t
+ *      (pthread nao e nativo do Windows);
+ *   3. conversao UTF-16LE<->UTF-8 do clipboard: MultiByteToWideChar/
+ *      WideCharToMultiByte no lugar de iconv (evita depender de
+ *      libiconv separado no MSYS2 — a API ja e nativa do Windows);
+ *   4. teclado: o GDK no backend Win32 ja entrega o SCANCODE PS/2 cru em
+ *      hardware_keycode (nao um keycode X11), entao a traducao XKB deste
+ *      arquivo nao se aplica — rs_tecla() manda o scancode direto pra
+ *      freerdp_input_send_keyboard_event(), sem GetVirtualKeyCodeFromKeycode.
+ * Tudo o resto (certificado, clipboard, pipeline grafico, resize, settings
+ * de seguranca) e IDENTICO nos dois lados — nao duplicar esse tanto so por
+ * causa dos quatro pontos acima.
  *
  * COMPILAR:
- *   gcc -shared -O2 -Wall -o librdpshim.dll rdpshim.c \
- *       $(pkg-config --cflags --libs freerdp-client3 freerdp3 winpr3)
+ *   Linux:   veja build.sh / instalar.sh (pkg-config freerdp3
+ *            freerdp-client3 winpr3)
+ *   Windows: veja compilar_exe.ps1 / instalar.ps1 (mesmos pkg-config,
+ *            + -lws2_32 -D__STDC_NO_THREADS__ — ver RDPSHIM-interno.md,
+ *            nao publicado, pro achado do <threads.h> ausente no MSYS2)
  */
 
-/* WIN32_LEAN_AND_MEAN antes de winsock2.h: sem isto, o windows.h que
- * vem atras traz shellapi.h, cujas macros NIIF_* colidem com os enums
- * de mesmo nome que freerdp/rail.h declara (erro real visto compilando:
- * "expected identifier before numeric constant" em NIIF_NONE). */
+#ifdef _WIN32
+/* WIN32_LEAN_AND_MEAN antes de winsock2.h: sem isto, o windows.h que vem
+ * atras traz shellapi.h, cujas macros NIIF_* colidem com os enums de
+ * mesmo nome que freerdp/rail.h declara (achado testando: "expected
+ * identifier before numeric constant" em NIIF_NONE). */
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
+#endif
 
 #include <freerdp/freerdp.h>
 #include <freerdp/gdi/gdi.h>
+#include <freerdp/gdi/gfx.h>
+#include <freerdp/channels/rdpgfx.h>
 #include <freerdp/input.h>
-#include <freerdp/settings.h>
-#include <freerdp/version.h>
-#include <winpr/synch.h>
+#include <freerdp/scancode.h>
+#include <freerdp/locale/keyboard.h>
+#include <freerdp/client/cmdline.h>
+#include <freerdp/addin.h>
+#include <freerdp/client/channels.h>
+#include <freerdp/client/cliprdr.h>
+#include <freerdp/client/disp.h>
+#include <freerdp/channels/channels.h>
+#include <freerdp/channels/cliprdr.h>
+#include <freerdp/channels/disp.h>
 #include <winpr/wtypes.h>
+#include <winpr/synch.h>
+#include <winpr/user.h>       /* CF_TEXT, CF_UNICODETEXT */
+#include <winpr/input.h>      /* GetVirtualKeyCodeFromKeycode e afins */
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
 
-/* WSAStartup — o Winsock NAO se inicializa sozinho no Windows. Todo
+#ifndef _WIN32
+#include <iconv.h>
+#include <pthread.h>
+#endif
+
+/* ---- mutex do clipboard: CRITICAL_SECTION (Windows) ou pthread (Linux),
+ * atras de 4 macros — o resto do arquivo chama so MUTEX_*, nunca a API
+ * nativa direto. */
+#ifdef _WIN32
+typedef CRITICAL_SECTION rdpshim_mutex_t;
+#define MUTEX_INIT(m)    InitializeCriticalSection(m)
+#define MUTEX_LOCK(m)    EnterCriticalSection(m)
+#define MUTEX_UNLOCK(m)  LeaveCriticalSection(m)
+#define MUTEX_DESTROY(m) DeleteCriticalSection(m)
+#else
+typedef pthread_mutex_t rdpshim_mutex_t;
+#define MUTEX_INIT(m)    pthread_mutex_init(m, NULL)
+#define MUTEX_LOCK(m)    pthread_mutex_lock(m)
+#define MUTEX_UNLOCK(m)  pthread_mutex_unlock(m)
+#define MUTEX_DESTROY(m) pthread_mutex_destroy(m)
+#endif
+
+/* WSAStartup — o Winsock nao se inicializa sozinho no Windows. Todo
  * cliente FreeRDP "de verdade" (wfreerdp.exe incluso) chama isto no
- * proprio main() antes de qualquer coisa de rede; como o shim nao TEM
- * um main() (e uma DLL chamada pelo Python), precisa chamar aqui.
- * Achado testando: sem isto, getaddrinfo() falha pra QUALQUER host,
- * ate um IP literal como "127.0.0.1" — sintoma enganoso, parece erro
+ * proprio main(); uma DLL chamada via ctypes nao tem main(), entao
+ * precisa chamar aqui. Achado testando: sem isto, getaddrinfo() falha
+ * pra QUALQUER host, ate um IP literal — sintoma enganoso, parece erro
  * de DNS mas e so Winsock nunca inicializado. */
+#ifdef _WIN32
 static int WSA_INICIADO = 0;
 
 static void garantir_winsock(void) {
@@ -62,303 +134,879 @@ static void garantir_winsock(void) {
     WSAStartup(MAKEWORD(2, 2), &wsa);
     WSA_INICIADO = 1;
 }
+#endif
 
-/* Callbacks para o lado Python — deliberadamente simples, sem struct
- * nenhuma cruzando a fronteira (mesma disciplina do vncshim.c). */
+/* ---- callbacks para o lado Python (escalares/ponteiros opacos, como no
+ * vncshim) ---- */
 typedef void (*cb_atualizou)(void *ctx, int x, int y, int w, int h);
 typedef void (*cb_redimensionou)(void *ctx, int w, int h);
-typedef void (*cb_desconectou)(void *ctx, uint32_t codigo, const char *motivo);
+typedef void (*cb_desconectou)(void *ctx, const char *motivo);
+/* devolve 1 (aceitar e guardar), 2 (aceitar so nesta sessao) ou 0 (recusar) —
+ * mesma convencao do pVerifyCertificateEx/pVerifyChangedCertificateEx */
+typedef int (*cb_certificado_novo)(void *ctx, const char *host, uint16_t porta,
+                                   const char *nome_comum, const char *assunto,
+                                   const char *emissor, const char *digital,
+                                   uint32_t flags);
+typedef int (*cb_certificado_mudou)(void *ctx, const char *host, uint16_t porta,
+                                    const char *nome_comum, const char *assunto,
+                                    const char *emissor, const char *digital_novo,
+                                    const char *assunto_antigo,
+                                    const char *emissor_antigo,
+                                    const char *digital_antigo, uint32_t flags);
+/* texto chegou do clipboard REMOTO (utf-8, sem terminador incluso no tam) */
+typedef void (*cb_clip_texto)(void *ctx, const char *utf8, int tam);
+/* canal Display Control pronto para receber pedidos de resize (depois de
+ * DisplayControlCaps) — antes disso rs_pedir_resize so devolve 0 calado */
+typedef void (*cb_disp_pronto)(void *ctx);
 
-/* Contexto customizado do FreeRDP: rdpContext TEM que ser o primeiro
- * campo — e o unico contrato de layout que o FreeRDP exige de quem
- * estende o contexto. instance->ContextSize (ver rs_criar) informa o
- * tamanho total; freerdp_context_new() aloca e devolve isto via
- * instance->context, ja com o campo rdpContext preenchido. */
+/* nosso rdpContext estendido — o padrao da lib e crescer freerdp_context com
+ * campos proprios no final, e usar ContextSize/ContextNew para isso */
 typedef struct {
-    rdpContext context;    /* PRECISA ser o primeiro campo */
+    rdpContext ctx;
+    void *sessao;               /* aponta de volta para a Sessao* dona */
+} RdpCtx;
 
-    void *ctx_py;
+typedef struct {
+    freerdp *inst;
+    void *pyctx;                 /* repassado de volta ao Python */
     cb_atualizou ao_atualizar;
     cb_redimensionou ao_redimensionar;
     cb_desconectou ao_desconectar;
+    cb_certificado_novo ao_certificado_novo;
+    cb_certificado_mudou ao_certificado_mudou;
+    cb_clip_texto ao_clip_texto;
+    cb_disp_pronto ao_disp_pronto;
 
+    char *host;
+    int porta;
     char *usuario;
     char *senha;
     char *dominio;
 
-    int largura_pedida;
-    int altura_pedida;
-    int ignorar_certificado;   /* equivalente ao /cert:ignore de hoje */
+    int conectado;
+    int erro_auth;               /* 1 se a falha foi de credenciais */
+    char erro_msg[256];
 
-    int morto;
-} MeuContexto;
+    /* clipboard: canal CLIPRDR, so texto (CF_UNICODETEXT). NULL enquanto o
+     * canal nao conectou (servidor pode nao anunciar RedirectClipboard). */
+    CliprdrClientContext *cliprdr;
+    rdpshim_mutex_t clip_lock;
+    /* texto do HOST, pronto para responder um ServerFormatDataRequest —
+     * guardado ja convertido para UTF-16LE, formato que o CF_UNICODETEXT
+     * exige na fiacao do protocolo. */
+    uint8_t *clip_local_utf16;
+    size_t clip_local_utf16_bytes;
 
-/* ---- callbacks de bootstrap (chamados pelo FreeRDP, nao pelo Python) ---- */
+    /* Display Control: redimensionamento dinamico. NULL enquanto o canal
+     * nao conectou (servidor pode nao suportar). SendMonitorLayout so pode
+     * ser chamado depois que DisplayControlCaps informar os limites. */
+    DispClientContext *disp;
+    int disp_caps_ok;
+    uint32_t disp_max_monitores, disp_fator_a, disp_fator_b;
+} Sessao;
 
-static BOOL cb_context_new(freerdp *instance, rdpContext *context) {
-    (void)instance;
-    (void)context;
-    return TRUE;   /* nada extra a inicializar alem do que rs_criar faz */
+static Sessao *sessao_de(freerdp *inst) {
+    RdpCtx *rc = (RdpCtx *)inst->context;
+    return rc ? (Sessao *)rc->sessao : NULL;
 }
 
-static void cb_context_free(freerdp *instance, rdpContext *context) {
-    (void)instance;
-    (void)context;
-}
-
-/* Roda ANTES do handshake de rede. E aqui que se pede os codecs — de
- * proposito pedimos os SIMPLES (bitmap cru/RLE, NSCodec desligado,
- * RemoteFX desligado): sao eles que o gdi_init() decodifica em software
- * sem depender da pilha de video pesada (ffmpeg/x264/x265/av1...) que
- * hoje faz o bundle do wfreerdp.exe pesar ~84MB. Trocar por codecs mais
- * eficientes fica pra depois, se a banda/CPU de alguma ligacao exigir. */
-static BOOL cb_pre_connect(freerdp *instance) {
-    rdpSettings *settings = instance->context->settings;
-    MeuContexto *mc = (MeuContexto *)instance->context;
-
-    /* host/porta ja foram gravados em rs_conectar, ANTES de
-     * freerdp_connect() chamar este callback — nada a fazer aqui com
-     * eles. (Achado ao testar: uma linha residual que lia e regravava
-     * FreeRDP_ServerHostname aqui corrompia o valor — set_string libera
-     * o ponteiro antigo antes de copiar, e o "antigo" e o mesmo que
-     * acabara de ser lido — classico bug de auto-atribuicao.) */
-    if (mc->largura_pedida > 0)
-        freerdp_settings_set_uint32(settings, FreeRDP_DesktopWidth, (UINT32)mc->largura_pedida);
-    if (mc->altura_pedida > 0)
-        freerdp_settings_set_uint32(settings, FreeRDP_DesktopHeight, (UINT32)mc->altura_pedida);
-    freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32);
-
-    freerdp_settings_set_bool(settings, FreeRDP_RemoteFxCodec, FALSE);
-    freerdp_settings_set_bool(settings, FreeRDP_NSCodec, FALSE);
-    freerdp_settings_set_bool(settings, FreeRDP_SoftwareGdi, TRUE);
-    freerdp_settings_set_bool(settings, FreeRDP_IgnoreCertificate,
-                              mc->ignorar_certificado ? TRUE : FALSE);
-
-    /* +clipboard/-clipboard etc. (canais dinamicos) ficam de fora nesta
-     * primeira versao — soh tela, teclado e mouse. */
-    return TRUE;
-}
-
-static BOOL cb_end_paint(rdpContext *context) {
-    MeuContexto *mc = (MeuContexto *)context;
+/* ---- pipeline grafico: BeginPaint/EndPaint acumulam a area suja de um
+ * lote e avisam o Python UMA vez por lote, igual ao hook_terminou do VNC */
+static BOOL hook_begin_paint(rdpContext *context) {
     rdpGdi *gdi = context->gdi;
-    if (!gdi || mc->morto) return TRUE;
-
-    /* v1: repinta a regiao suja acumulada pelo proprio gdi (gdi->
-     * primary->hdc->hwnd->invalid) se disponivel; sem ela, repinta tudo.
-     * Repintar tudo a cada EndPaint e simples e correto — otimizar para
-     * so a regiao suja e um ajuste de desempenho, nao de corretude, e
-     * fica para quando houver uma ligacao lenta de verdade para medir
-     * contra (mesmo cuidado do vncshim.c: nao calibrar no escuro). */
-    if (mc->ao_atualizar)
-        mc->ao_atualizar(mc->ctx_py, 0, 0, gdi->width, gdi->height);
+    gdi->primary->hdc->hwnd->invalid->null = TRUE;
+    gdi->primary->hdc->hwnd->ninvalid = 0;
     return TRUE;
 }
 
-/* Roda DEPOIS do handshake — e aqui que o framebuffer de software
- * (gdi->primary_buffer) fica disponivel. Equivalente ao hook_malloc_fb
- * do vncshim.c, so que o FreeRDP ja cuida de alocar/realocar sozinho;
- * so precisamos pendurar o EndPaint pra saber quando repintar. */
-static BOOL cb_post_connect(freerdp *instance) {
-    MeuContexto *mc = (MeuContexto *)instance->context;
+static BOOL hook_end_paint(rdpContext *context) {
+    rdpGdi *gdi = context->gdi;
+    Sessao *s = sessao_de(context->instance);
+    if (!s) return TRUE;
+    if (gdi->primary->hdc->hwnd->invalid->null) return TRUE;
+    int x = gdi->primary->hdc->hwnd->invalid->x;
+    int y = gdi->primary->hdc->hwnd->invalid->y;
+    int w = gdi->primary->hdc->hwnd->invalid->w;
+    int h = gdi->primary->hdc->hwnd->invalid->h;
+    if (s->ao_atualizar) s->ao_atualizar(s->pyctx, x, y, w, h);
+    return TRUE;
+}
 
-    if (!gdi_init(instance, PIXEL_FORMAT_BGRX32))
-        return FALSE;
+static BOOL hook_desktop_resize(rdpContext *context) {
+    Sessao *s = sessao_de(context->instance);
+    rdpGdi *gdi = context->gdi;
+    UINT32 w = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopWidth);
+    UINT32 h = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopHeight);
+    if (!gdi_resize(gdi, w, h)) return FALSE;
+    if (s && s->ao_redimensionar) s->ao_redimensionar(s->pyctx, (int)w, (int)h);
+    return TRUE;
+}
 
-    instance->context->update->EndPaint = cb_end_paint;
+/* ---- certificado ---- */
+static DWORD hook_certificado_novo(freerdp *inst, const char *host, UINT16 porta,
+                                   const char *nome_comum, const char *assunto,
+                                   const char *emissor, const char *digital,
+                                   DWORD flags) {
+    Sessao *s = sessao_de(inst);
+    if (s && s->ao_certificado_novo)
+        return (DWORD)s->ao_certificado_novo(s->pyctx, host, porta, nome_comum,
+                                            assunto, emissor, digital,
+                                            (uint32_t)flags);
+    return 1;      /* sem gancho definido: aceita e guarda, como o gtk-frdp */
+}
 
-    if (mc->ao_redimensionar) {
-        rdpGdi *gdi = instance->context->gdi;
-        mc->ao_redimensionar(mc->ctx_py, gdi->width, gdi->height);
+static DWORD hook_certificado_mudou(freerdp *inst, const char *host, UINT16 porta,
+                                    const char *nome_comum, const char *assunto,
+                                    const char *emissor, const char *digital_novo,
+                                    const char *assunto_antigo,
+                                    const char *emissor_antigo,
+                                    const char *digital_antigo, DWORD flags) {
+    Sessao *s = sessao_de(inst);
+    if (s && s->ao_certificado_mudou)
+        return (DWORD)s->ao_certificado_mudou(s->pyctx, host, porta, nome_comum,
+                                             assunto, emissor, digital_novo,
+                                             assunto_antigo, emissor_antigo,
+                                             digital_antigo, (uint32_t)flags);
+    return 0;      /* sem gancho definido: por seguranca, RECUSA a mudanca */
+}
+
+static BOOL hook_authenticate_ex(freerdp *inst, char **usuario, char **senha,
+                                 char **dominio, rdp_auth_reason motivo) {
+    Sessao *s = sessao_de(inst);
+    (void)motivo;
+    /* Credenciais ja foram passadas antes do connect (mesma licao do VNC e
+     * do gtk-frdp: definir depois nao adianta). Chegar aqui significa que
+     * ou faltou informar, ou o servidor rejeitou — nos dois casos so
+     * repetimos o que ja tinhamos, sem inventar dialogo aqui: quem decide
+     * se tenta de novo e o lado Python. */
+    if (s) {
+        free(*usuario); *usuario = strdup(s->usuario ? s->usuario : "");
+        free(*senha);   *senha   = strdup(s->senha ? s->senha : "");
+        free(*dominio); *dominio = strdup(s->dominio ? s->dominio : "");
+        if (!s->usuario || !*s->usuario || !s->senha) s->erro_auth = 1;
     }
     return TRUE;
 }
 
-static void cb_post_disconnect(freerdp *instance) {
-    MeuContexto *mc = (MeuContexto *)instance->context;
-    if (instance->context->gdi) {
-        gdi_free(instance);
+/* ---- clipboard (canal CLIPRDR): so texto, formato CF_UNICODETEXT.
+ *
+ * Fluxo portado de frdp-channel-clipboard.c (gtk-frdp), so que sem a parte
+ * de arquivos/imagens (fora de escopo aqui — se precisar, e o proximo passo
+ * natural, usando o mesmo canal). Duas direcoes:
+ *
+ *   REMOTO -> HOST: o servidor manda ServerFormatList quando o clipboard de
+ *   la muda. Respondemos ClientFormatListResponse e, se tem CF_UNICODETEXT
+ *   na lista, pedimos os dados na hora (ClientFormatDataRequest) em vez de
+ *   esperar o operador colar — mais simples que a troca "pull" que o
+ *   gtk-frdp faz via GtkClipboard, ao custo de buscar texto que talvez
+ *   nunca seja colado. Aceitavel: e so texto, poucos KB.
+ *
+ *   HOST -> REMOTO: rs_clipboard_definir_texto (chamada pelo Python quando o
+ *   clipboard do host muda) guarda o texto e manda ClientFormatList
+ *   anunciando CF_UNICODETEXT disponivel. Quando o servidor efetivamente
+ *   pedir (ServerFormatDataRequest), respondemos com o texto guardado.
+ */
+
+/* Conversoes UTF-16LE <-> UTF-8. CF_UNICODETEXT trafega em UTF-16LE com
+ * terminador nulo — o resto do mundo (GTK) fala UTF-8.
+ *
+ * No Windows usamos MultiByteToWideChar/WideCharToMultiByte (API nativa,
+ * ja disponivel sem depender de libiconv separado no MSYS2) em vez de
+ * iconv — mesma tarefa, implementacao por plataforma atras da mesma
+ * assinatura de funcao. */
+#ifdef _WIN32
+static char *conv_utf16le_para_utf8(const uint8_t *dados, size_t bytes, size_t *tam_saida) {
+    if (bytes % 2 != 0) return NULL;
+    int n_wchars = (int)(bytes / 2);
+    int tam_utf8 = WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)dados, n_wchars,
+                                       NULL, 0, NULL, NULL);
+    if (tam_utf8 <= 0) return NULL;
+    char *saida = (char *)malloc((size_t)tam_utf8);
+    if (!saida) return NULL;
+    WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)dados, n_wchars, saida, tam_utf8,
+                        NULL, NULL);
+    *tam_saida = (size_t)tam_utf8;
+    return saida;
+}
+
+static uint8_t *conv_utf8_para_utf16le(const char *utf8, size_t tam, size_t *bytes_saida) {
+    int n_wchars = MultiByteToWideChar(CP_UTF8, 0, utf8, (int)tam, NULL, 0);
+    if (n_wchars <= 0 && tam > 0) return NULL;
+    size_t bytes = ((size_t)n_wchars + 1) * 2;    /* +1 wchar: terminador nulo */
+    uint8_t *saida = (uint8_t *)malloc(bytes);
+    if (!saida) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, utf8, (int)tam, (LPWSTR)saida, n_wchars);
+    saida[bytes - 2] = 0; saida[bytes - 1] = 0;   /* terminador nulo UTF-16 */
+    *bytes_saida = bytes;
+    return saida;
+}
+#else
+static char *conv_utf16le_para_utf8(const uint8_t *dados, size_t bytes, size_t *tam_saida) {
+    iconv_t cd = iconv_open("UTF-8", "UTF-16LE");
+    if (cd == (iconv_t)-1) return NULL;
+    size_t in_restam = bytes;
+    size_t out_cap = bytes * 2 + 4;      /* UTF-8 nunca excede 2x o UTF-16 aqui */
+    char *saida = (char *)malloc(out_cap);
+    if (!saida) { iconv_close(cd); return NULL; }
+    char *in_ptr = (char *)dados;
+    char *out_ptr = saida;
+    size_t out_restam = out_cap;
+    size_t r = iconv(cd, &in_ptr, &in_restam, &out_ptr, &out_restam);
+    iconv_close(cd);
+    if (r == (size_t)-1) { free(saida); return NULL; }
+    *tam_saida = out_cap - out_restam;
+    return saida;
+}
+
+static uint8_t *conv_utf8_para_utf16le(const char *utf8, size_t tam, size_t *bytes_saida) {
+    iconv_t cd = iconv_open("UTF-16LE", "UTF-8");
+    if (cd == (iconv_t)-1) return NULL;
+    size_t in_restam = tam;
+    size_t out_cap = tam * 4 + 4;
+    uint8_t *saida = (uint8_t *)malloc(out_cap);
+    if (!saida) { iconv_close(cd); return NULL; }
+    char *in_ptr = (char *)utf8;
+    char *out_ptr = (char *)saida;
+    size_t out_restam = out_cap;
+    size_t r = iconv(cd, &in_ptr, &in_restam, &out_ptr, &out_restam);
+    iconv_close(cd);
+    if (r == (size_t)-1) { free(saida); return NULL; }
+    size_t usado = out_cap - out_restam;
+    /* terminador nulo UTF-16 (dois bytes) — CF_UNICODETEXT exige */
+    saida = (uint8_t *)realloc(saida, usado + 2);
+    saida[usado] = 0; saida[usado + 1] = 0;
+    *bytes_saida = usado + 2;
+    return saida;
+}
+#endif
+
+static UINT hook_clip_monitor_ready(CliprdrClientContext *ctx,
+                                    const CLIPRDR_MONITOR_READY *mr) {
+    (void)mr;
+    Sessao *s = (Sessao *)ctx->custom;
+
+    CLIPRDR_GENERAL_CAPABILITY_SET gcs;
+    memset(&gcs, 0, sizeof(gcs));
+    gcs.capabilitySetType = CB_CAPSTYPE_GENERAL;
+    gcs.capabilitySetLength = CB_CAPSTYPE_GENERAL_LEN;
+    gcs.version = CB_CAPS_VERSION_2;
+    gcs.generalFlags = CB_USE_LONG_FORMAT_NAMES;
+    CLIPRDR_CAPABILITIES caps;
+    memset(&caps, 0, sizeof(caps));
+    caps.cCapabilitiesSets = 1;
+    caps.capabilitySets = (CLIPRDR_CAPABILITY_SET *)&gcs;
+    ctx->ClientCapabilities(ctx, &caps);
+
+    CLIPRDR_FORMAT fmt;
+    memset(&fmt, 0, sizeof(fmt));
+    fmt.formatId = CF_UNICODETEXT;
+    CLIPRDR_FORMAT_LIST fl;
+    memset(&fl, 0, sizeof(fl));
+    fl.common.msgType = CB_FORMAT_LIST;
+    if (s) {
+        MUTEX_LOCK(&s->clip_lock);
+        int temos_texto = s->clip_local_utf16 != NULL;
+        MUTEX_UNLOCK(&s->clip_lock);
+        if (temos_texto) {
+            fl.numFormats = 1;
+            fl.formats = &fmt;
+        }
     }
-    if (mc->ao_desconectar) {
-        UINT32 codigo = freerdp_get_last_error(instance->context);
-        const char *motivo = freerdp_get_last_error_string(codigo);
-        mc->ao_desconectar(mc->ctx_py, codigo, motivo ? motivo : "");
+    ctx->ClientFormatList(ctx, &fl);
+    return CHANNEL_RC_OK;
+}
+
+static UINT hook_clip_server_format_list(CliprdrClientContext *ctx,
+                                         const CLIPRDR_FORMAT_LIST *fl) {
+    int tem_texto = 0;
+    for (UINT32 i = 0; i < fl->numFormats; i++) {
+        if (fl->formats[i].formatId == CF_UNICODETEXT
+            || fl->formats[i].formatId == CF_TEXT) {
+            tem_texto = 1;
+            break;
+        }
+    }
+
+    CLIPRDR_FORMAT_LIST_RESPONSE resp;
+    memset(&resp, 0, sizeof(resp));
+    resp.common.msgType = CB_FORMAT_LIST_RESPONSE;
+    resp.common.msgFlags = CB_RESPONSE_OK;
+    ctx->ClientFormatListResponse(ctx, &resp);
+
+    if (tem_texto) {
+        CLIPRDR_FORMAT_DATA_REQUEST req;
+        memset(&req, 0, sizeof(req));
+        req.common.msgType = CB_FORMAT_DATA_REQUEST;
+        req.requestedFormatId = CF_UNICODETEXT;
+        ctx->ClientFormatDataRequest(ctx, &req);
+    }
+    return CHANNEL_RC_OK;
+}
+
+static UINT hook_clip_server_format_list_response(
+    CliprdrClientContext *ctx, const CLIPRDR_FORMAT_LIST_RESPONSE *resp) {
+    (void)ctx; (void)resp;
+    return CHANNEL_RC_OK;
+}
+
+/* servidor esta pedindo O QUE O HOST TEM (operador colando no remoto) */
+static UINT hook_clip_server_format_data_request(
+    CliprdrClientContext *ctx, const CLIPRDR_FORMAT_DATA_REQUEST *req) {
+    Sessao *s = (Sessao *)ctx->custom;
+    CLIPRDR_FORMAT_DATA_RESPONSE resp;
+    memset(&resp, 0, sizeof(resp));
+    resp.common.msgType = CB_FORMAT_DATA_RESPONSE;
+
+    if (!s || req->requestedFormatId != CF_UNICODETEXT) {
+        resp.common.msgFlags = CB_RESPONSE_FAIL;
+        return ctx->ClientFormatDataResponse(ctx, &resp);
+    }
+
+    MUTEX_LOCK(&s->clip_lock);
+    uint8_t *copia = NULL;
+    size_t tam = 0;
+    if (s->clip_local_utf16) {
+        tam = s->clip_local_utf16_bytes;
+        copia = (uint8_t *)malloc(tam);
+        if (copia) memcpy(copia, s->clip_local_utf16, tam);
+    }
+    MUTEX_UNLOCK(&s->clip_lock);
+
+    if (!copia) {
+        resp.common.msgFlags = CB_RESPONSE_FAIL;
+        UINT r = ctx->ClientFormatDataResponse(ctx, &resp);
+        return r;
+    }
+    resp.common.msgFlags = CB_RESPONSE_OK;
+    resp.common.dataLen = (UINT32)tam;
+    resp.requestedFormatData = copia;
+    UINT r = ctx->ClientFormatDataResponse(ctx, &resp);
+    free(copia);
+    return r;
+}
+
+/* resposta do servidor ao QUE O HOST PEDIU (operador colando no host) */
+static UINT hook_clip_server_format_data_response(
+    CliprdrClientContext *ctx, const CLIPRDR_FORMAT_DATA_RESPONSE *resp) {
+    Sessao *s = (Sessao *)ctx->custom;
+    if (!s || !s->ao_clip_texto) return CHANNEL_RC_OK;
+    if (!(resp->common.msgFlags & CB_RESPONSE_OK)) return CHANNEL_RC_OK;
+
+    size_t tam_utf8 = 0;
+    char *utf8 = conv_utf16le_para_utf8(resp->requestedFormatData,
+                                        resp->common.dataLen, &tam_utf8);
+    if (!utf8) return CHANNEL_RC_OK;
+    /* remove o \0 final que o CF_UNICODETEXT sempre carrega, se sobrou */
+    while (tam_utf8 > 0 && utf8[tam_utf8 - 1] == '\0') tam_utf8--;
+    s->ao_clip_texto(s->pyctx, utf8, (int)tam_utf8);
+    free(utf8);
+    return CHANNEL_RC_OK;
+}
+
+/* Servidor informa os limites de resolucao aceitos. SendMonitorLayout so
+ * pode ser chamado depois deste callback — chamar antes e um "canal ainda
+ * nao pronto" silencioso do lado do servidor. */
+static UINT hook_disp_caps(DispClientContext *ctx, UINT32 max_monitores,
+                           UINT32 fator_a, UINT32 fator_b) {
+    Sessao *s = (Sessao *)ctx->custom;
+    if (s) {
+        s->disp_max_monitores = max_monitores;
+        s->disp_fator_a = fator_a;
+        s->disp_fator_b = fator_b;
+        s->disp_caps_ok = 1;
+        if (s->ao_disp_pronto) s->ao_disp_pronto(s->pyctx);
+    }
+    return CHANNEL_RC_OK;
+}
+
+static void hook_canal_conectou(void *context,
+                                const ChannelConnectedEventArgs *e) {
+    RdpCtx *rc = (RdpCtx *)context;
+    Sessao *s = (Sessao *)rc->sessao;
+
+    if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
+        DispClientContext *disp = (DispClientContext *)e->pInterface;
+        disp->custom = s;
+        disp->DisplayControlCaps = hook_disp_caps;
+        s->disp = disp;
+        s->disp_caps_ok = 0;
+        return;
+    }
+
+    if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
+        CliprdrClientContext *cliprdr = (CliprdrClientContext *)e->pInterface;
+        cliprdr->custom = s;
+        cliprdr->MonitorReady = hook_clip_monitor_ready;
+        cliprdr->ServerFormatList = hook_clip_server_format_list;
+        cliprdr->ServerFormatListResponse = hook_clip_server_format_list_response;
+        cliprdr->ServerFormatDataRequest = hook_clip_server_format_data_request;
+        cliprdr->ServerFormatDataResponse = hook_clip_server_format_data_response;
+        s->cliprdr = cliprdr;
+        return;
+    }
+
+    if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0) {
+        /* SEM ISTO A TELA FICA BRANCA PARA SEMPRE apos o login.
+         *
+         * Com FreeRDP_SupportGraphicsPipeline=TRUE (ja ligado em
+         * rs_conectar) o servidor manda os quadros pelo canal RDPGFX em vez
+         * do caminho classico de bitmap update — e SEM gdi_graphics_
+         * pipeline_init a gdi nunca aprende a decodificar esse canal: os
+         * hooks BeginPaint/EndPaint (que avisam o Python via ao_atualizar)
+         * so disparam para o caminho classico, entao nenhuma atualizacao
+         * real chega. E exatamente o papel que
+         * frdp_on_channel_connected_event_handler cumpre no gtk-frdp. */
+        rdpContext *ctx = (rdpContext *)context;
+        gdi_graphics_pipeline_init(ctx->gdi, (RdpgfxClientContext *)e->pInterface);
+        return;
     }
 }
 
-/* Credenciais: a copia (strdup) e obrigatoria — o FreeRDP libera o que
- * devolvemos aqui, mesma regra do hook_senha/hook_credencial no vncshim.c. */
-static BOOL cb_authenticate_ex(freerdp *instance, char **username, char **password,
-                               char **domain, rdp_auth_reason reason) {
-    (void)reason;
-    MeuContexto *mc = (MeuContexto *)instance->context;
-    free(*username); free(*password); free(*domain);
-    *username = strdup(mc->usuario ? mc->usuario : "");
-    *password = strdup(mc->senha ? mc->senha : "");
-    *domain = strdup(mc->dominio ? mc->dominio : "");
+static void hook_canal_desconectou(void *context,
+                                   const ChannelDisconnectedEventArgs *e) {
+    RdpCtx *rc = (RdpCtx *)context;
+    Sessao *s = (Sessao *)rc->sessao;
+
+    if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
+        s->disp = NULL;
+        s->disp_caps_ok = 0;
+        return;
+    }
+    if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
+        s->cliprdr = NULL;
+        return;
+    }
+    if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0) {
+        rdpContext *ctx = (rdpContext *)context;
+        gdi_graphics_pipeline_uninit(ctx->gdi, (RdpgfxClientContext *)e->pInterface);
+        return;
+    }
+}
+
+/* Sem isto o canal CLIPRDR (e qualquer outro) nunca e carregado: no
+ * FreeRDP3 o carregamento dos plugins de canal acontece via este callback,
+ * nao mais dentro do PreConnect (foi o que o gtk-frdp tambem descobriu —
+ * ver o #ifdef HAVE_FREERDP3 em torno de LoadChannels no frdp-session.c). */
+static BOOL hook_load_channels(freerdp *inst) {
+    return freerdp_client_load_addins(inst->context->channels,
+                                      inst->context->settings);
+}
+
+/* ---- pre/post connect: prepara o pipeline grafico (gdi_init), do jeito
+ * que o gtk-frdp faz em frdp_post_connect ---- */
+static BOOL hook_pre_connect(freerdp *inst) {
+    rdpSettings *settings = inst->context->settings;
+    BYTE *ordens = freerdp_settings_get_pointer_writable(settings, FreeRDP_OrderSupport);
+    if (ordens) {
+        memset(ordens, 0, 32);
+        ordens[NEG_DSTBLT_INDEX] = TRUE;
+        ordens[NEG_PATBLT_INDEX] = TRUE;
+        ordens[NEG_SCRBLT_INDEX] = TRUE;
+        ordens[NEG_OPAQUE_RECT_INDEX] = TRUE;
+        ordens[NEG_MULTIOPAQUERECT_INDEX] = TRUE;
+        ordens[NEG_LINETO_INDEX] = TRUE;
+        ordens[NEG_POLYLINE_INDEX] = TRUE;
+        ordens[NEG_MEMBLT_INDEX] = TRUE;
+        ordens[NEG_MEMBLT_V2_INDEX] = TRUE;
+        ordens[NEG_GLYPH_INDEX_INDEX] = TRUE;
+        ordens[NEG_FAST_INDEX_INDEX] = TRUE;
+    }
+    PubSub_SubscribeChannelConnected(inst->context->pubSub, hook_canal_conectou);
+    PubSub_SubscribeChannelDisconnected(inst->context->pubSub, hook_canal_desconectou);
     return TRUE;
 }
 
-/* Aceita qualquer certificado — equivalente ao /cert:ignore que o
- * rdp_windows.py ja passa hoje pro wfreerdp.exe. Devolve 1 (aceitar
- * desta vez) sempre que ignorar_certificado estiver ligado; senao,
- * recusa (0) — nao ha dialogo interativo nesta v1. */
-static DWORD cb_verify_certificate_ex(freerdp *instance, const char *host, UINT16 port,
-                                      const char *common_name, const char *subject,
-                                      const char *issuer, const char *fingerprint,
-                                      DWORD flags) {
-    (void)instance; (void)host; (void)port; (void)common_name;
-    (void)subject; (void)issuer; (void)fingerprint; (void)flags;
-    MeuContexto *mc = (MeuContexto *)instance->context;
-    return mc->ignorar_certificado ? 1 : 0;
+static BOOL hook_post_connect(freerdp *inst) {
+    rdpContext *context = inst->context;
+    if (!gdi_init(inst, PIXEL_FORMAT_BGRX32)) return FALSE;
+    context->update->BeginPaint = hook_begin_paint;
+    context->update->EndPaint = hook_end_paint;
+    context->update->DesktopResize = hook_desktop_resize;
+    /* primeiro quadro: framebuffer ja existe, avisa o tamanho de uma vez */
+    Sessao *s = sessao_de(inst);
+    if (s && s->ao_redimensionar)
+        s->ao_redimensionar(s->pyctx, context->gdi->width, context->gdi->height);
+    return TRUE;
+}
+
+static void hook_post_disconnect(freerdp *inst) {
+    if (inst && inst->context) gdi_free(inst);
+}
+
+static BOOL hook_context_new(freerdp *inst, rdpContext *context) {
+    (void)inst; (void)context;
+    return TRUE;
+}
+
+static void hook_context_free(freerdp *inst, rdpContext *context) {
+    (void)inst; (void)context;
 }
 
 /* ---- API exposta ao Python ---- */
 
-MeuContexto *rs_criar(void *ctx_py, cb_atualizou ao_atualizar,
-                      cb_redimensionou ao_redimensionar,
-                      cb_desconectou ao_desconectar) {
+Sessao *rs_criar(void *pyctx,
+                 cb_atualizou ao_atualizar,
+                 cb_redimensionou ao_redimensionar,
+                 cb_desconectou ao_desconectar,
+                 cb_certificado_novo ao_certificado_novo,
+                 cb_certificado_mudou ao_certificado_mudou,
+                 cb_clip_texto ao_clip_texto,
+                 cb_disp_pronto ao_disp_pronto) {
+#ifdef _WIN32
     garantir_winsock();
-    freerdp *instance = freerdp_new();
-    if (!instance) return NULL;
+#endif
+    Sessao *s = (Sessao *)calloc(1, sizeof(Sessao));
+    if (!s) return NULL;
+    MUTEX_INIT(&s->clip_lock);
 
-    instance->ContextSize = sizeof(MeuContexto);
-    instance->ContextNew = cb_context_new;
-    instance->ContextFree = cb_context_free;
-    instance->PreConnect = cb_pre_connect;
-    instance->PostConnect = cb_post_connect;
-    instance->PostDisconnect = cb_post_disconnect;
-    instance->AuthenticateEx = cb_authenticate_ex;
-    instance->VerifyCertificateEx = cb_verify_certificate_ex;
+    /* Registra o provedor de addins ESTATICOS (compilados dentro da propria
+     * freerdp-client3), para o hook_load_channels achar cliprdr/rdpdr/disp
+     * etc sem precisar de .so de plugin instalados a parte no sistema.
+     * Sem isto o freerdp_client_load_addins tenta abrir plugins dinamicos
+     * que nao existem aqui, e a conexao falha com
+     *     ERRCONNECT_PRE_CONNECT_FAILED
+     * mesmo com o nosso PreConnect tendo retornado TRUE — o gtk-frdp faz a
+     * mesma chamada em frdp_session_init_freerdp. */
+    freerdp_register_addin_provider(freerdp_channels_load_static_addin_entry, 0);
 
-    if (!freerdp_context_new(instance)) {
-        freerdp_free(instance);
+    freerdp *inst = freerdp_new();
+    if (!inst) { MUTEX_DESTROY(&s->clip_lock); free(s); return NULL; }
+
+    inst->ContextSize = sizeof(RdpCtx);
+    inst->ContextNew = hook_context_new;
+    inst->ContextFree = hook_context_free;
+    inst->PreConnect = hook_pre_connect;
+    inst->PostConnect = hook_post_connect;
+    inst->PostDisconnect = hook_post_disconnect;
+    inst->LoadChannels = hook_load_channels;
+    inst->AuthenticateEx = hook_authenticate_ex;
+    inst->VerifyCertificateEx = hook_certificado_novo;
+    inst->VerifyChangedCertificateEx = hook_certificado_mudou;
+
+    if (!freerdp_context_new(inst)) {
+        freerdp_free(inst);
+        MUTEX_DESTROY(&s->clip_lock);
+        free(s);
         return NULL;
     }
+    ((RdpCtx *)inst->context)->sessao = s;
 
-    MeuContexto *mc = (MeuContexto *)instance->context;
-    mc->ctx_py = ctx_py;
-    mc->ao_atualizar = ao_atualizar;
-    mc->ao_redimensionar = ao_redimensionar;
-    mc->ao_desconectar = ao_desconectar;
-    mc->ignorar_certificado = 1;   /* mesmo padrao de hoje (/cert:ignore) */
-    return mc;
+    s->inst = inst;
+    s->pyctx = pyctx;
+    s->ao_atualizar = ao_atualizar;
+    s->ao_redimensionar = ao_redimensionar;
+    s->ao_desconectar = ao_desconectar;
+    s->ao_certificado_novo = ao_certificado_novo;
+    s->ao_certificado_mudou = ao_certificado_mudou;
+    s->ao_clip_texto = ao_clip_texto;
+    s->ao_disp_pronto = ao_disp_pronto;
+    return s;
 }
 
-void rs_definir_credenciais(MeuContexto *mc, const char *usuario,
-                            const char *senha, const char *dominio) {
-    if (!mc) return;
-    free(mc->usuario); mc->usuario = usuario ? strdup(usuario) : NULL;
-    free(mc->senha);   mc->senha   = senha   ? strdup(senha)   : NULL;
-    free(mc->dominio); mc->dominio = dominio ? strdup(dominio) : NULL;
+/* Chamada pelo Python quando o clipboard do HOST muda (texto). Guarda em
+ * UTF-16LE, ja pronto para responder um ServerFormatDataRequest, e anuncia
+ * ao servidor que ha algo novo — mesmo passo que send_client_format_list
+ * faz no gtk-frdp. Sem canal conectado ainda, so guarda: o anuncio sai
+ * pelo hook_clip_monitor_ready assim que o canal abrir. */
+void rs_clipboard_definir_texto(Sessao *s, const char *utf8, int tam) {
+    if (!s) return;
+    size_t bytes = 0;
+    uint8_t *utf16 = (utf8 && tam > 0)
+        ? conv_utf8_para_utf16le(utf8, (size_t)tam, &bytes) : NULL;
+
+    MUTEX_LOCK(&s->clip_lock);
+    free(s->clip_local_utf16);
+    s->clip_local_utf16 = utf16;
+    s->clip_local_utf16_bytes = bytes;
+    MUTEX_UNLOCK(&s->clip_lock);
+
+    if (s->cliprdr && utf16) {
+        CLIPRDR_FORMAT fmt;
+        memset(&fmt, 0, sizeof(fmt));
+        fmt.formatId = CF_UNICODETEXT;
+        CLIPRDR_FORMAT_LIST fl;
+        memset(&fl, 0, sizeof(fl));
+        fl.common.msgType = CB_FORMAT_LIST;
+        fl.numFormats = 1;
+        fl.formats = &fmt;
+        s->cliprdr->ClientFormatList(s->cliprdr, &fl);
+    }
 }
 
-void rs_definir_tela(MeuContexto *mc, int largura, int altura) {
-    if (!mc) return;
-    mc->largura_pedida = largura;
-    mc->altura_pedida = altura;
+/* Pede ao servidor que redimensione a area remota — canal Display Control,
+ * portado de frdp_channel_display_control_resize_display (gtk-frdp).
+ * Devolve 1 se o pedido foi enviado, 0 se ainda nao da (canal nao
+ * conectado, caps nao chegaram, ou area maior que o permitido). */
+int rs_pedir_resize(Sessao *s, int largura, int altura) {
+    if (!s || !s->disp || !s->disp_caps_ok) return 0;
+
+    uint32_t lw = (uint32_t)largura, lh = (uint32_t)altura;
+    if (lw < DISPLAY_CONTROL_MIN_MONITOR_WIDTH) lw = DISPLAY_CONTROL_MIN_MONITOR_WIDTH;
+    if (lw > DISPLAY_CONTROL_MAX_MONITOR_WIDTH) lw = DISPLAY_CONTROL_MAX_MONITOR_WIDTH;
+    if (lh < DISPLAY_CONTROL_MIN_MONITOR_HEIGHT) lh = DISPLAY_CONTROL_MIN_MONITOR_HEIGHT;
+    if (lh > DISPLAY_CONTROL_MAX_MONITOR_HEIGHT) lh = DISPLAY_CONTROL_MAX_MONITOR_HEIGHT;
+    if (lw % 2) lw--;      /* largura impar confunde alguns servidores */
+
+    /* limite de area que o servidor aceita, informado no DisplayControlCaps */
+    if ((uint64_t)lw * lh >
+        (uint64_t)s->disp_max_monitores * s->disp_fator_a * s->disp_fator_b) {
+        return 0;
+    }
+
+    DISPLAY_CONTROL_MONITOR_LAYOUT layout;
+    memset(&layout, 0, sizeof(layout));
+    layout.Flags = DISPLAY_CONTROL_MONITOR_PRIMARY;
+    layout.Width = lw;
+    layout.Height = lh;
+    layout.Orientation = 0;              /* ORIENTATION_LANDSCAPE (DMDO_DEFAULT) */
+    layout.DesktopScaleFactor = 100;
+    layout.DeviceScaleFactor = 100;
+
+    return s->disp->SendMonitorLayout(s->disp, 1, &layout) == CHANNEL_RC_OK;
 }
 
-void rs_definir_ignorar_certificado(MeuContexto *mc, int ignorar) {
-    if (mc) mc->ignorar_certificado = ignorar;
+void rs_definir_credenciais(Sessao *s, const char *usuario, const char *senha,
+                            const char *dominio) {
+    if (!s) return;
+    free(s->usuario); s->usuario = usuario ? strdup(usuario) : NULL;
+    free(s->senha);   s->senha   = senha ? strdup(senha) : NULL;
+    free(s->dominio); s->dominio = dominio ? strdup(dominio) : NULL;
 }
 
-/* Conecta. Devolve 1 em sucesso. BLOQUEIA — chame de uma thread (mesma
- * regra do vs_conectar no vncshim.c). */
-int rs_conectar(MeuContexto *mc, const char *host, int porta) {
-    if (!mc) return 0;
-    freerdp *instance = mc->context.instance;
-    rdpSettings *settings = mc->context.settings;
+/* Conecta. Devolve 1 em sucesso. BLOQUEIA — chame de uma thread, igual ao
+ * vs_conectar do VNC. */
+int rs_conectar(Sessao *s, const char *host, int porta) {
+    if (!s || !s->inst) return 0;
+    rdpSettings *settings = s->inst->context->settings;
+
+    free(s->host); s->host = strdup(host);
+    s->porta = porta;
 
     freerdp_settings_set_string(settings, FreeRDP_ServerHostname, host);
     freerdp_settings_set_uint32(settings, FreeRDP_ServerPort, (UINT32)porta);
+    if (s->usuario) freerdp_settings_set_string(settings, FreeRDP_Username, s->usuario);
+    if (s->senha)   freerdp_settings_set_string(settings, FreeRDP_Password, s->senha);
+    if (s->dominio) freerdp_settings_set_string(settings, FreeRDP_Domain, s->dominio);
 
-    if (!freerdp_connect(instance)) {
-        mc->morto = 1;
+    freerdp_settings_set_bool(settings, FreeRDP_RdpSecurity, TRUE);
+    freerdp_settings_set_bool(settings, FreeRDP_TlsSecurity, TRUE);
+    freerdp_settings_set_bool(settings, FreeRDP_NlaSecurity, TRUE);
+    freerdp_settings_set_uint32(settings, FreeRDP_EncryptionMethods,
+                                ENCRYPTION_METHOD_40BIT | ENCRYPTION_METHOD_128BIT
+                                | ENCRYPTION_METHOD_FIPS);
+    freerdp_settings_set_uint32(settings, FreeRDP_EncryptionLevel,
+                                ENCRYPTION_LEVEL_CLIENT_COMPATIBLE);
+    freerdp_settings_set_bool(settings, FreeRDP_NegotiateSecurityLayer, TRUE);
+
+    freerdp_settings_set_bool(settings, FreeRDP_DesktopResize, TRUE);
+    freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE);
+    freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE);
+    freerdp_settings_set_bool(settings, FreeRDP_RemoteFxCodec, TRUE);
+    freerdp_settings_set_bool(settings, FreeRDP_SupportGraphicsPipeline, TRUE);
+    /* canal CLIPRDR — sem isto o LoadChannels nem tenta carregar o plugin
+     * de clipboard e hook_canal_conectou nunca dispara para "cliprdr". */
+    freerdp_settings_set_bool(settings, FreeRDP_RedirectClipboard, TRUE);
+    freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32);
+    freerdp_settings_set_bool(settings, FreeRDP_AllowFontSmoothing, TRUE);
+    freerdp_settings_set_bool(settings, FreeRDP_AllowUnanouncedOrdersFromServer, TRUE);
+
+    /* IgnoreCertificate NAO e usado de proposito: essa flag faz a
+     * libfreerdp pular a verificacao inteira e NUNCA chamar
+     * VerifyCertificateEx/VerifyChangedCertificateEx — bypass total, sem
+     * pedir nada a ninguem. O pedido explicito aqui foi o oposto: uma
+     * caixa de confirmacao estilo SSH, tanto para certificado novo quanto
+     * mudado. Os dois callbacks (hook_certificado_novo/hook_certificado_
+     * mudou, ja registrados como VerifyCertificateEx/VerifyChangedCertifi
+     * cateEx acima) disparam normalmente sem esta flag — testado contra
+     * host real removendo o .pem salvo. */
+
+    /* layout de teclado: pt-BR ABNT2 por padrao, com escape por env var —
+     * mesma solucao que ja tinhamos para o gtk-frdp dentro do Flatpak */
+    {
+        const char *env = getenv("ACESSOS_KBD_LAYOUT");
+        uint32_t layout = 0x00000416;
+        if (env && *env) layout = (uint32_t)strtoul(env, NULL, 0);
+        freerdp_settings_set_uint32(settings, FreeRDP_KeyboardLayout, layout);
+        freerdp_settings_set_uint32(settings, FreeRDP_KeyboardType, 7);
+        freerdp_settings_set_uint32(settings, FreeRDP_KeyboardSubType, 2);
+    }
+
+    if (!freerdp_connect(s->inst)) {
+        UINT32 codigo = freerdp_get_last_error(s->inst->context);
+        const char *msg = freerdp_get_last_error_string(codigo);
+        snprintf(s->erro_msg, sizeof(s->erro_msg), "%s", msg ? msg : "falha ao conectar");
+        switch (codigo) {
+            case FREERDP_ERROR_AUTHENTICATION_FAILED:
+            case FREERDP_ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS:
+            case FREERDP_ERROR_CONNECT_LOGON_FAILURE:
+            case FREERDP_ERROR_CONNECT_ACCOUNT_EXPIRED:
+                s->erro_auth = 1;
+                break;
+            default:
+                break;
+        }
         return 0;
     }
+    s->conectado = 1;
     return 1;
 }
 
-/* Espera ate `ms` milissegundos por dados/timeout do FreeRDP. Devolve 1
- * se ha algo pra processar, 0 em timeout, -1 em erro — mesma convencao
- * do vs_esperar. Usa freerdp_get_event_handles/WaitForMultipleObjects
- * (Win32) em vez do WaitForMessage do vncshim.c, que e API da
- * libvncclient — aqui e API nativa do Windows, ja usada sem pywin32 em
- * conpty.py/win_embed.py. */
-int rs_esperar(MeuContexto *mc, int ms) {
-    if (!mc || mc->morto) return -1;
+/* Espera ate `ms` por atividade nos handles do FreeRDP. >0 ha o que
+ * processar, 0 timeout, <0 erro/desconectou. */
+int rs_esperar(Sessao *s, int ms) {
+    if (!s || !s->inst || !s->conectado) return -1;
     HANDLE handles[64];
-    DWORD n = freerdp_get_event_handles(&mc->context, handles, 64);
+    DWORD n = freerdp_get_event_handles(s->inst->context, handles, 64);
     if (n == 0) return -1;
-    DWORD r = WaitForMultipleObjects(n, handles, FALSE, (DWORD)ms);
-    if (r == WAIT_TIMEOUT) return 0;
-    if (r == WAIT_FAILED) return -1;
+    DWORD status = WaitForMultipleObjects(n, handles, FALSE, (DWORD)ms);
+    if (status == WAIT_TIMEOUT) return 0;
+    if (status == WAIT_FAILED) return -1;
     return 1;
 }
 
-/* Processa mensagens pendentes. Devolve 1 se ok, 0 se a conexao caiu. */
-int rs_processar(MeuContexto *mc) {
-    if (!mc || mc->morto) return 0;
-    if (!freerdp_check_event_handles(&mc->context)) {
-        mc->morto = 1;
+/* Processa eventos pendentes. Devolve 1 se ok, 0 se a conexao caiu. */
+int rs_processar(Sessao *s) {
+    if (!s || !s->inst || !s->conectado) return 0;
+    if (freerdp_shall_disconnect_context(s->inst->context)) {
+        s->conectado = 0;
         return 0;
+    }
+    if (!freerdp_check_event_handles(s->inst->context)) {
+        if (freerdp_get_last_error(s->inst->context) != FREERDP_ERROR_SUCCESS) {
+            s->conectado = 0;
+            return 0;
+        }
     }
     return 1;
 }
 
-uint8_t *rs_framebuffer(MeuContexto *mc) {
-    if (!mc || !mc->context.gdi) return NULL;
-    return mc->context.gdi->primary_buffer;
+uint8_t *rs_framebuffer(Sessao *s) {
+    if (!s || !s->inst || !s->inst->context || !s->inst->context->gdi) return NULL;
+    return s->inst->context->gdi->primary_buffer;
 }
 
-int rs_largura(MeuContexto *mc) {
-    return (mc && mc->context.gdi) ? mc->context.gdi->width : 0;
+int rs_largura(Sessao *s) {
+    return (s && s->inst && s->inst->context && s->inst->context->gdi)
+        ? s->inst->context->gdi->width : 0;
 }
 
-int rs_altura(MeuContexto *mc) {
-    return (mc && mc->context.gdi) ? mc->context.gdi->height : 0;
+int rs_altura(Sessao *s) {
+    return (s && s->inst && s->inst->context && s->inst->context->gdi)
+        ? s->inst->context->gdi->height : 0;
 }
 
-int rs_morto(MeuContexto *mc) {
-    return (!mc || mc->morto) ? 1 : 0;
+int rs_stride(Sessao *s) {
+    return (s && s->inst && s->inst->context && s->inst->context->gdi)
+        ? s->inst->context->gdi->stride : 0;
 }
 
-/* Teclado: `scancode` e o scancode PS/2 Set 1 cru — o mesmo vocabulario
- * que freerdp_input_send_keyboard_event espera. event.hardware_keycode
- * do GDK, no backend Win32, JA E esse valor (GDK copia direto do
- * WM_KEYDOWN/WM_KEYUP), sem precisar de tabela VK->scancode nenhuma do
- * lado Python. O bit de tecla ESTENDIDA (setas, Insert/Delete/Home/End/
- * PageUp/PageDown, Ctrl/Alt direitos...) o GDK nao expoe separado —
- * fica por conta de uma lista estatica do lado Python (ver
- * RDPSHIM-interno.md). KBD_FLAGS_RELEASE/KBD_FLAGS_EXTENDED (winpr/
- * input.h) sao aplicados aqui a partir dos dois inteiros que o Python
- * decidiu. */
-void rs_tecla(MeuContexto *mc, int scancode, int estendida, int pressionada) {
-    if (!mc || mc->morto || !mc->context.input) return;
-    UINT16 flags = 0;
-    if (estendida) flags |= KBD_FLAGS_EXTENDED;
-    if (!pressionada) flags |= KBD_FLAGS_RELEASE;
-    freerdp_input_send_keyboard_event(mc->context.input, flags, (UINT8)scancode);
-}
+int rs_morto(Sessao *s) { return (!s || !s->conectado) ? 1 : 0; }
+int rs_erro_auth(Sessao *s) { return s ? s->erro_auth : 0; }
+const char *rs_erro_msg(Sessao *s) { return s ? s->erro_msg : ""; }
 
-/* Mouse: botoes em bits (PTR_FLAGS_*, winpr/input.h) — o lado Python
- * decide qual flag mandar (botao esquerdo/direito/meio, roda), igual o
- * vs_ponteiro do vncshim.c faz com o bitmask do RFB. */
-void rs_ponteiro(MeuContexto *mc, int x, int y, int flags) {
-    if (!mc || mc->morto || !mc->context.input) return;
-    freerdp_input_send_mouse_event(mc->context.input, (UINT16)flags,
+/* ---- entrada: ponteiro e teclado ---- */
+
+void rs_ponteiro_mover(Sessao *s, int x, int y) {
+    if (!s || !s->inst || !s->conectado) return;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    freerdp_input_send_mouse_event(s->inst->context->input, PTR_FLAGS_MOVE,
                                    (UINT16)x, (UINT16)y);
 }
 
-void rs_destruir(MeuContexto *mc) {
-    if (!mc) return;
-    freerdp *instance = mc->context.instance;
-    if (!mc->morto)
-        freerdp_disconnect(instance);
-    free(mc->usuario);
-    free(mc->senha);
-    free(mc->dominio);
-    freerdp_context_free(instance);
-    freerdp_free(instance);
+/* botao: 1=esquerdo 2=meio 3=direito; pressionado 1/0 */
+void rs_ponteiro_botao(Sessao *s, int x, int y, int botao, int pressionado) {
+    if (!s || !s->inst || !s->conectado) return;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    UINT16 flags = pressionado ? PTR_FLAGS_DOWN : 0;
+    switch (botao) {
+        case 1: flags |= PTR_FLAGS_BUTTON1; break;
+        case 2: flags |= PTR_FLAGS_BUTTON3; break;   /* RDP: 2=direito, 3=meio */
+        case 3: flags |= PTR_FLAGS_BUTTON2; break;
+        default: return;
+    }
+    freerdp_input_send_mouse_event(s->inst->context->input, flags,
+                                   (UINT16)x, (UINT16)y);
+}
+
+/* roda: eixo 0=vertical 1=horizontal; passos positivo/negativo */
+void rs_ponteiro_roda(Sessao *s, int eixo, int passos) {
+    if (!s || !s->inst || !s->conectado || passos == 0) return;
+    UINT16 flags = eixo ? PTR_FLAGS_HWHEEL : PTR_FLAGS_WHEEL;
+    UINT16 valor = (UINT16)(abs(passos) * 0x78 > 255 ? 255 : abs(passos) * 0x78);
+    if (passos < 0) flags |= PTR_FLAGS_WHEEL_NEGATIVE | ((~valor + 1) & 0x01FF);
+    else flags |= valor & 0x01FF;
+    freerdp_input_send_mouse_event(s->inst->context->input, flags, 0, 0);
+}
+
+#ifdef _WIN32
+/* Windows: hardware_keycode do GDK no backend Win32 JA E o scancode PS/2
+ * Set 1 cru (GDK copia direto do WM_KEYDOWN/WM_KEYUP) — nao ha keycode
+ * X11 nem traducao XKB para fazer aqui, ao contrario do Linux logo
+ * abaixo. O bit de tecla ESTENDIDA (setas, Insert/Delete/Home/End/
+ * PageUp/PageDown, Ctrl/Alt direitos...) o GDK nao expoe separado; fica
+ * por conta de uma lista estatica do lado Python (ver rdpwidget.py) que
+ * decide o parametro `estendida` antes de chamar aqui. KBD_FLAGS_RELEASE/
+ * KBD_FLAGS_EXTENDED sao do proprio winpr/input.h, mesmos valores que o
+ * caminho X11 usa por baixo — so a ORIGEM do scancode difere. */
+void rs_tecla(Sessao *s, int scancode, int estendida, int pressionada) {
+    if (!s || !s->inst || !s->conectado) return;
+    UINT16 flags = 0;
+    if (estendida) flags |= KBD_FLAGS_EXTENDED;
+    if (!pressionada) flags |= KBD_FLAGS_RELEASE;
+    freerdp_input_send_keyboard_event(s->inst->context->input, flags,
+                                      (UINT8)scancode);
+}
+#else
+/* keycode: codigo X11 (hardware_keycode do GDK, ja no padrao X11 mesmo sob
+ * Wayland).
+ *
+ * freerdp_keyboard_get_rdp_scancode_from_x11_keycode (o caminho "legado" que
+ * o gtk-frdp usa em versoes < 3.11) esta MARCADA deprecated desde a 3.11.0
+ * com a nota "implement yourself in client" — na pratica, nesta build
+ * (3.31.1) ela nao mapeia mais nada de verdade e nenhuma tecla chegava do
+ * outro lado (confirmado testando contra host real: mouse funcionava,
+ * teclado nao).
+ *
+ * O caminho novo, que o proprio gtk-frdp ja teria migrado para builds
+ * recentes (ver o ramo HAVE_FREERDP_3_11_0 em frdp_session_send_key):
+ *   keycode X11 -> GetVirtualKeyCodeFromKeycode(..., WINPR_KEYCODE_TYPE_XKB)
+ *              -> GetVirtualScanCodeFromVirtualKeyCode(..., IBM_ENHANCED)
+ *              -> freerdp_input_send_keyboard_event_ex
+ * SEM o deslocamento de 8 que o caminho legado precisava: aquele offset
+ * compensava o FreeRDP caindo em codigos estilo evdev quando nao achava
+ * DISPLAY (caso do Flatpak sandboxed); aqui os dois lados (GDK e WinPR/XKB)
+ * ja falam o mesmo dialeto de keycode X11, sem tradução extra. */
+void rs_tecla(Sessao *s, uint32_t keycode_x11, int pressionada) {
+    if (!s || !s->inst || !s->conectado) return;
+
+    DWORD vk = GetVirtualKeyCodeFromKeycode(keycode_x11, WINPR_KEYCODE_TYPE_XKB);
+    if (vk == 0) return;
+    DWORD scancode = GetVirtualScanCodeFromVirtualKeyCode(vk, WINPR_KBD_TYPE_IBM_ENHANCED);
+    if (scancode == RDP_SCANCODE_UNKNOWN) return;
+
+    freerdp_input_send_keyboard_event_ex(s->inst->context->input,
+                                         pressionada ? TRUE : FALSE, FALSE,
+                                         scancode);
+}
+#endif
+
+void rs_destruir(Sessao *s) {
+    if (!s) return;
+    if (s->inst) {
+        if (s->conectado) freerdp_disconnect(s->inst);
+        /* freerdp_free ja libera o contexto por dentro (mesmo padrao do
+         * gtk-frdp em idle_close: so freerdp_free, sem context_free
+         * separado). Chamar os dois seria liberar duas vezes o mesmo
+         * bloco. */
+        freerdp_free(s->inst);
+    }
+    free(s->host);
+    free(s->usuario);
+    free(s->senha);
+    free(s->dominio);
+    free(s->clip_local_utf16);
+    MUTEX_DESTROY(&s->clip_lock);
+    free(s);
 }
