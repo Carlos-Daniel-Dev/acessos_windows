@@ -1,10 +1,10 @@
 ﻿{
-    "versao":  "1.0.0",
-    "gerado_em":  "2026-09-09T20:41:39Z",
+    "versao":  "1.1.0",
+    "gerado_em":  "2026-09-11T17:36:37Z",
     "copiar":  {
                    "python/acessos.py":  {
-                                             "sha256":  "6f50958c2e53d461495a02676f8a8b80995bcb003fec5bc872d2d64aaad9a44d",
-                                             "bytes":  313926
+                                             "sha256":  "bc56ed4256eded348869cb6ca2c425158bfc3f20fdb62225e7753a749454493a",
+                                             "bytes":  314101
                                          },
                    "python/vncwidget.py":  {
                                                "sha256":  "19f3ca19f3b2131f21b773d7c86db4bb2484d8f9aeeae2e591dfbb57c4e2de65",
@@ -22,18 +22,18 @@
                                           "sha256":  "8b065f71dcf33547d4de73de1d742a1063a1d2e6ea02835bca45041b38c8e40c",
                                           "bytes":  54473
                                       },
-                   "python/rdp_windows.py":  {
-                                                 "sha256":  "a4a2d53bcbf9b638acb6c8508e01de60c0486027958251c261f6e86282fc5367",
-                                                 "bytes":  14823
-                                             },
+                   "python/rdp_shim.py":  {
+                                              "sha256":  "75d658f571e0a1408ad204d0bf7e8a9ba510d3d6d50d7e6837d017a118cbd609",
+                                              "bytes":  6579
+                                          },
+                   "python/rdpwidget.py":  {
+                                               "sha256":  "e4e0193b25345a6b4fd1e1de38cea741f8b36b5530fa5252a02c4e7eb28516e2",
+                                               "bytes":  17362
+                                           },
                    "python/ssh_windows.py":  {
                                                  "sha256":  "5fd3e7a5cc1e8a2bc37ed81e05a9930fc584032f132c5207908127e93b392d36",
                                                  "bytes":  16757
                                              },
-                   "python/win_embed.py":  {
-                                               "sha256":  "1cc3c56fd740fc9ff29202d9576a41e046406ce80d5bc8371c98c31a4980d2ee",
-                                               "bytes":  12364
-                                           },
                    "python/conpty.py":  {
                                             "sha256":  "9e9769817fb3bbe51ce60bb949357a6241f25a525c5aa1bf9e62a1ea63c59b1c",
                                             "bytes":  15196
@@ -72,6 +72,11 @@
                                            "sha256":  "09efe3c59e73356a55f1119d5770a0b2949a5495a43f93cf26190d26e2661d08",
                                            "bytes":  11883,
                                            "saida":  "libvncshim.dll"
+                                       },
+                     "src/rdpshim.c":  {
+                                           "sha256":  "d7993cde04acf0912f8df25a55bfe74889e1c645263893e11b7d2decdc8a9a41",
+                                           "bytes":  15105,
+                                           "saida":  "librdpshim.dll"
                                        }
                  }
 }
