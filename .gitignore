@@ -19,3 +19,8 @@ __pycache__/
 # rascunho local pra comparar as duas versões durante o porte.
 .linux_novo/
 acessos.tar
+
+# Doc interna de desenvolvimento do RDP embutido via shim (fluxograma,
+# referência de função, achados de bug) — uso e verificação só da equipe
+# local, nunca publicada; ver Item 8 do BACKLOG-exe.md pelo contexto.
+RDPSHIM-interno.md
