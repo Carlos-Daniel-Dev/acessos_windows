@@ -1,6 +1,6 @@
 ﻿{
-    "versao":  "1.1.0",
-    "gerado_em":  "2026-09-11T17:36:37Z",
+    "versao":  "1.2.0",
+    "gerado_em":  "2026-09-11T19:38:26Z",
     "copiar":  {
                    "python/acessos.py":  {
                                              "sha256":  "bc56ed4256eded348869cb6ca2c425158bfc3f20fdb62225e7753a749454493a",
@@ -23,12 +23,12 @@
                                           "bytes":  54473
                                       },
                    "python/rdp_shim.py":  {
-                                              "sha256":  "75d658f571e0a1408ad204d0bf7e8a9ba510d3d6d50d7e6837d017a118cbd609",
-                                              "bytes":  6579
+                                              "sha256":  "98d156db350802eee36cc1578c8465ebceac1243cd7afae0e7cfb174d80e98f4",
+                                              "bytes":  7030
                                           },
                    "python/rdpwidget.py":  {
-                                               "sha256":  "e4e0193b25345a6b4fd1e1de38cea741f8b36b5530fa5252a02c4e7eb28516e2",
-                                               "bytes":  17362
+                                               "sha256":  "b6e0f297efaed2b9edc2de0ae50beac0803a4f313bbdf507d5faa6524882cf3c",
+                                               "bytes":  38423
                                            },
                    "python/ssh_windows.py":  {
                                                  "sha256":  "5fd3e7a5cc1e8a2bc37ed81e05a9930fc584032f132c5207908127e93b392d36",
@@ -74,8 +74,8 @@
                                            "saida":  "libvncshim.dll"
                                        },
                      "src/rdpshim.c":  {
-                                           "sha256":  "d7993cde04acf0912f8df25a55bfe74889e1c645263893e11b7d2decdc8a9a41",
-                                           "bytes":  15105,
+                                           "sha256":  "8715d6eea6552d4ab3b53a0dfdc64bcc5ba030224bbce4534ae863341d2a3029",
+                                           "bytes":  43952,
                                            "saida":  "librdpshim.dll"
                                        }
                  }

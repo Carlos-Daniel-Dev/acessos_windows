@@ -777,9 +777,53 @@ failed", `0x00020014`), sem crash, `log.txt` limpo. Tamanho do bundle:
 que o peso é da pilha de codecs do FreeRDP, não do `wfreerdp.exe` em
 si; ver a pesquisa acima).
 
-**Ainda não confirmado** (mesma lacuna de antes): uma sessão que
-autentica com SUCESSO e chega a pintar tela — só testado até a
-rejeição de credencial. Teclado/mouse (mapeados em `rdpwidget.py`, ver
-`RDPSHIM-interno.md`, não publicado) também dependem desse teste pra
-confirmar de verdade. Canais dinâmicos (clipboard, redirecionamento de
-unidade) continuam de fora, de propósito.
+**Confirmado pelo usuário em VM** (2026-09-11): sessão autenticando com
+sucesso, tela pintando, teclado e mouse funcionando — "funcionou
+perfeitamente, ainda notei ganho de velocidade de instalação do
+instalador e velocidade de conexão do rdp". Mergeado em produção (PR
+#17) e lançado como **release v1.1.0**.
+
+### v1.2.0 — adoção do rdpshim.c/rdpwidget.py maduros do fork Linux (2026-09-11)
+
+O rdpshim/rdpwidget da v1.1.0 acima era a versão MÍNIMA (só tela +
+teclado + mouse), escrita do zero pra provar o conceito. Em paralelo, o
+fork `acessos-linux-port` (mais ativo, base de onde o Acessos original
+é portado) evoluiu um `rdpshim.c`/`rdpwidget.py` bem mais maduro (890/858
+linhas contra as 359/447 daqui), com canal de clipboard (CLIPRDR),
+pipeline gráfico RDPGFX completo (com `gdi_graphics_pipeline_init` no
+lugar certo — a versão mínima daqui evitava a "tela branca pra sempre"
+só por acidente, por nunca ligar GFX), redimensionamento dinâmico via
+canal Display Control, e confirmação de certificado (novo/mudado) via
+diálogo estilo SSH (antes só havia `IgnoreCertificate=TRUE` silencioso).
+
+Em vez de reimplementar cada um desses recursos aqui do zero, os dois
+arquivos foram **adotados diretamente do fork Linux**, com os patches
+Windows aplicados por cima do mesmo arquivo compartilhado:
+- `WSAStartup()` explícito (`garantir_winsock`) — sem isso o Winsock
+  não se inicializa numa DLL carregada via ctypes, mesmo bug já achado
+  na v1.1.0, agora reaplicado sobre a base nova
+- `CRITICAL_SECTION` no lugar de `pthread_mutex_t` pro mutex do clipboard
+  (não há pthread nativo no Windows)
+- `MultiByteToWideChar`/`WideCharToMultiByte` no lugar de `iconv` pra
+  conversão UTF-16LE/UTF-8 do clipboard
+- `rs_tecla` com assinatura própria pro Windows (scancode PS/2 cru +
+  flag de tecla estendida) — o GDK no backend Win32 já entrega o
+  scancode pronto em `hardware_keycode`, diferente do X11/Linux que
+  precisa traduzir keycode X11 → scancode via WinPR
+  (`GetVirtualKeyCodeFromKeycode`/`GetVirtualScanCodeFromVirtualKeyCode`)
+
+`python/rdp_shim.py` (a fábrica `construir()`, exclusiva daqui — não
+existe no fork Linux, depende de `AbaBase` do `acessos.py`) foi
+atualizado pra API nova do widget: sinais renomeados
+(`rdp-conectado`/`rdp-desconectado`/`rdp-erro`, sem `rdp-initialized`
+separado), `conectar()` sem `largura`/`altura`/`ignorar_certificado`
+(tamanho agora segue a aba sozinho via Display Control), e o botão
+"⌨" — antes desabilitado com tooltip de "não portado" — agora liga de
+verdade `set_keyboard_grab()` (mesmo `Gdk.Seat.grab` do `vncwidget.py`).
+
+**Testado**: compilação limpa do shim contra MSYS2/FreeRDP 3.30 real
+(só warnings de depreciação já conhecidos), import + criação do widget
+via `WinDLL`, teste ao vivo em janela GTK contra porta fechada
+(confirma Winsock inicializando de verdade), e **sessão RDP real
+testada e aprovada pelo usuário em VM** antes do merge (PR #18).
+Mergeado e lançado como **release v1.2.0**.
