@@ -35,9 +35,9 @@ $ArquivosCopiar = @(
     "python\sftp.py",
     "python\cofre.py",
     "python\tema.py",
-    "python\rdp_windows.py",
+    "python\rdp_shim.py",
+    "python\rdpwidget.py",
     "python\ssh_windows.py",
-    "python\win_embed.py",
     "python\conpty.py",
     "python\bandeja_windows.py",
     "python\atualizador.py",
@@ -55,7 +55,8 @@ $ArquivosCopiar = @(
 
 # arquivos que precisam de um passo extra (compilação) em vez de so copiar
 $ArquivosCompilar = @(
-    @{ origem = "src\vncshim.c"; saida = "libvncshim.dll" }
+    @{ origem = "src\vncshim.c"; saida = "libvncshim.dll" },
+    @{ origem = "src\rdpshim.c"; saida = "librdpshim.dll" }
 )
 
 function Sha256($caminho) {

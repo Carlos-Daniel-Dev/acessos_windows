@@ -50,21 +50,31 @@ if ICONE and not os.path.isfile(ICONE):
     ICONE = None
 
 VNCSHIM_DLL = os.environ["ACESSOS_VNCSHIM_DLL"]
-GDKWIN32_TYPELIB = os.environ["ACESSOS_GDKWIN32_TYPELIB"]
+RDPSHIM_DLL = os.environ["ACESSOS_RDPSHIM_DLL"]
+# GdkWin32 (typelib) SAIU: só existia pra win_embed.py achar o HWND de um
+# widget pra fazer SetParent — RDP não reparenta janela nenhuma mais
+# (ver RDPSHIM-interno.md, não publicado). Nenhum módulo do projeto usa
+# GdkWin32 hoje.
 
 binarios = [
     (VNCSHIM_DLL, "."),
-    (GDKWIN32_TYPELIB, "gi_typelibs"),
+    (RDPSHIM_DLL, "."),
 ]
 
-# FreeRDP embutido (opcional): uma lista de nomes de arquivo, um por
-# linha, gerada por resolver_dlls.sh — compilar_exe.ps1 escreve o caminho
-# desse arquivo em ACESSOS_FREERDP_DEPS_TXT. Ausente (-SemRdp foi usado):
-# RDP fica exigindo FreeRDP instalado à parte, como antes desta mudança.
-lista_freerdp = os.environ.get("ACESSOS_FREERDP_DEPS_TXT")
+# Fechamento de dependencias do rdpshim.dll (libfreerdp3/libwinpr3 e a
+# pilha de codecs que elas linkam — ffmpeg, x264, x265, aom, opus...):
+# uma lista de nomes de arquivo, um por linha, gerada por
+# resolver_dlls.sh a partir do PROPRIO librdpshim.dll (nao mais do
+# wfreerdp.exe, que saiu do projeto — ver RDPSHIM-interno.md, nao
+# publicado). compilar_exe.ps1 escreve o caminho dessa lista em
+# ACESSOS_RDPSHIM_DEPS_TXT. Ausente: RDP fica indisponivel (o shim
+# carrega mas as DLLs de que ele depende nao estao no bundle) — nao ha
+# mais fallback de "FreeRDP instalado a parte", como o wfreerdp.exe
+# externo permitia antes.
+lista_rdpshim = os.environ.get("ACESSOS_RDPSHIM_DEPS_TXT")
 mingw_bin = os.environ.get("ACESSOS_MINGW64_BIN", r"C:\msys64\mingw64\bin")
-if lista_freerdp and os.path.isfile(lista_freerdp):
-    with open(lista_freerdp, encoding="utf-8") as f:
+if lista_rdpshim and os.path.isfile(lista_rdpshim):
+    with open(lista_rdpshim, encoding="utf-8") as f:
         for linha in f:
             nome = linha.strip()
             if not nome:
@@ -77,7 +87,7 @@ if lista_freerdp and os.path.isfile(lista_freerdp):
 # que fica compilado de propósito)
 MODULOS_PROJETO = {
     "acessos", "tema", "cofre", "sftp", "vncwidget",
-    "rdp_windows", "ssh_windows", "win_embed", "conpty", "bandeja_windows",
+    "rdp_shim", "rdpwidget", "ssh_windows", "conpty", "bandeja_windows",
     "atualizador", "dialogo_ui", "massa", "massa_ui", "importar_rdm",
 }
 
@@ -93,7 +103,7 @@ a = Analysis(
         (os.path.join(RAIZ, "manifesto.json"), "."),
     ],
     # redundante com a deteccao estatica normal do PyInstaller (os imports
-    # condicionais — "if sys.platform == 'win32': import win_embed" — já
+    # condicionais — "if sys.platform == 'win32': import rdp_shim" — já
     # são achados sozinhos), mas custo zero manter como rede de segurança
     hiddenimports=sorted(MODULOS_PROJETO),
     hookspath=[],

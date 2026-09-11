@@ -10,13 +10,17 @@
 #     2. instala os pacotes MSYS2 (GTK3, PyGObject, gcc, libvncclient, FreeRDP)
 #     3. instala os pacotes Python extras (paramiko, cryptography, argon2,
 #        pyte) dentro do Python do MSYS2 — sem pywin32/pywinpty, que
-#        não existem para o Python MinGW (ver win_embed.py e conpty.py)
-#     4. compila o vncshim.dll
+#        não existem para o Python MinGW (ver conpty.py)
+#     4. compila o vncshim.dll e o librdpshim.dll
 #     5. instala em %LOCALAPPDATA%\Acessos e cria o atalho do menu iniciar
+#
+#  RDP: embutido via librdpshim.dll (linka libfreerdp/libwinpr direto —
+#  ver RDPSHIM-interno.md, não publicado). FreeRDP dev (mingw-w64-x86_64-
+#  freerdp) é essencial agora, igual libvncclient — sem ele o script para
+#  (não há mais "-SemRdp" pra degradar com a aba desabilitada).
 #
 #  USO:
 #     .\instalar.ps1                instala ou atualiza
-#     .\instalar.ps1 -SemRdp        pula a checagem do FreeRDP (avisa e segue)
 #     .\instalar.ps1 -Verificar     so testa o que ja esta instalado
 #     .\instalar.ps1 -Remover       desinstala (preserva a configuracao)
 #     .\instalar.ps1 -Remover -LimparConfig
@@ -32,7 +36,6 @@
 
 [CmdletBinding()]
 param(
-    [switch]$SemRdp,
     [switch]$Verificar,
     [switch]$Remover,
     [switch]$LimparConfig
@@ -254,12 +257,11 @@ function Verificar-Tudo {
         $falhas++
     }
 
-    $freerdp = Get-Command "wfreerdp.exe" -ErrorAction SilentlyContinue
-    if (-not $freerdp) { $freerdp = Get-Command "freerdp.exe" -ErrorAction SilentlyContinue }
-    if ($freerdp) {
-        Ok "  FreeRDP ....... instalado ($($freerdp.Source))"
+    if (Test-Path (Join-Path $Destino "librdpshim.dll")) {
+        Ok "  rdpshim ........ instalado"
     } else {
-        Nota "  FreeRDP ....... ausente (a aba de RDP ficará desabilitada)"
+        Erro "  rdpshim não encontrado em $Destino"
+        $falhas++
     }
 
     $sshExe = Get-Command "ssh.exe" -ErrorAction SilentlyContinue
@@ -286,15 +288,6 @@ try:
 except Exception as e:
     falhou.append('GTK3: %s' % e)
 
-# typelib de que o win_embed depende para achar a HWND de um widget
-try:
-    import gi
-    gi.require_version('GdkWin32', '3.0')
-    from gi.repository import GdkWin32
-    print('  GdkWin32 ....... ok')
-except Exception as e:
-    falhou.append('GdkWin32 (necessário para embutir o RDP): %s' % e)
-
 for mod in ('paramiko', 'cryptography', 'pyte'):
     try:
         __import__(mod)
@@ -303,11 +296,10 @@ for mod in ('paramiko', 'cryptography', 'pyte'):
 
 # os dois modulos em ctypes que substituem pywin32 e pywinpty
 try:
-    import win_embed
-    print('  win_embed ...... %s' % ('ok' if win_embed.disponivel()
-                                     else 'indisponível'))
+    import rdpwidget
+    print('  rdpwidget ...... ok')
 except Exception as e:
-    falhou.append('win_embed: %s' % e)
+    falhou.append('rdpwidget: %s' % e)
 try:
     import conpty
     if conpty.TEM_CONPTY:
@@ -417,24 +409,18 @@ function Instalar-PacotesMsys2 {
         "mingw-w64-x86_64-python-gobject",
         "mingw-w64-x86_64-python-cairo",
         "mingw-w64-x86_64-python-pip",
-        "mingw-w64-x86_64-libvncserver"
+        "mingw-w64-x86_64-libvncserver",
+        # ESSENCIAL agora, nao mais opcional: o RDP embutido linka
+        # libfreerdp/libwinpr direto via librdpshim.dll (ver
+        # RDPSHIM-interno.md, nao publicado) — sem os headers/libs de
+        # dev do FreeRDP, rdpshim.c nem compila, igual libvncclient
+        # pro VNC.
+        "mingw-w64-x86_64-freerdp"
     )
     foreach ($p in $essenciais) {
         if (-not (Msys2-Tentar "pacman -S --needed --noconfirm $p")) {
-            throw "não consegui instalar $p — é essencial (GTK3/compilador/libvncclient)"
+            throw "não consegui instalar $p — é essencial (GTK3/compilador/libvncclient/FreeRDP)"
         }
-    }
-
-    # FreeRDP e opcional: sem ele so a aba de RDP fica indisponivel, o
-    # resto do Acessos (VNC, SSH, arquivos) funciona igual.
-    if ($SemRdp) {
-        Nota "FreeRDP pulado (-SemRdp)"
-    } elseif (Msys2-Tentar "pacman -S --needed --noconfirm mingw-w64-x86_64-freerdp") {
-        Nota "FreeRDP instalado"
-    } else {
-        Nota "FreeRDP indisponível pelo pacman — tente:"
-        Nota "  winget install FreeRDP.FreeRDP"
-        Nota "a aba de RDP fica desabilitada até então; o resto funciona"
     }
 }
 
@@ -510,12 +496,12 @@ function Instalar-PacotesPython {
     # puxa Rust), o que e lento e quebra facil. O MSYS2 ja publica os dois
     # compilados para o MinGW.
     #
-    # NAO estao aqui, de proposito: pywin32 e pywinpty. Os wheels deles
-    # sao para o CPython oficial (ABI MSVC) e NAO instalam neste Python
-    # (MinGW) — era a causa do "pip falhou (código 1)". As duas funcoes de
-    # que precisavamos deles estao reimplementadas em ctypes puro:
-    #   pywin32  -> python\win_embed.py  (SetParent, EnumWindows)
-    #   pywinpty -> python\conpty.py     (CreatePseudoConsole)
+    # NAO esta aqui, de proposito: pywinpty. O wheel dele e para o CPython
+    # oficial (ABI MSVC) e NAO instala neste Python (MinGW) — era a causa
+    # do "pip falhou (código 1)". A funcao de que precisavamos dele esta
+    # reimplementada em ctypes puro: python\conpty.py (CreatePseudoConsole).
+    # pywin32 nunca foi necessario aqui — nem win_embed.py (removido, RDP
+    # nao reparenta janela mais) nem rdpshim.c (C, nao Python) precisam dele.
     #
     # Instalados UM A UM, e nao numa lista: o pacman aborta a transacao
     # inteira quando UM alvo nao existe, entao um pacote ausente levaria
@@ -576,13 +562,34 @@ gcc -shared -O2 -Wall -o '$destinoDll' '$origemC' \
     }
 }
 
+# mesma receita, pro RDP embutido (ver RDPSHIM-interno.md, não publicado).
+# __STDC_NO_THREADS__ contorna um <threads.h> ausente neste MSYS2 (achado
+# testando — sem isto a compilação falha com "threads.h: No such file").
+function Compilar-Rdpshim {
+    Azul "[4b/5] compilando o librdpshim.dll"
+    New-Item -ItemType Directory -Force -Path $Destino | Out-Null
+    $origemC = (Join-Path $Aqui "src\rdpshim.c") -replace '\\', '/'
+    $destinoDll = (Join-Path $Destino "librdpshim.dll") -replace '\\', '/'
+    Msys2-Exec @"
+export PATH=/mingw64/bin:`$PATH
+gcc -shared -O2 -Wall -D__STDC_NO_THREADS__ -o '$destinoDll' '$origemC' \
+    `$(pkg-config --cflags --libs freerdp-client3 freerdp3 winpr3) -lws2_32
+"@
+    if (Test-Path (Join-Path $Destino "librdpshim.dll")) {
+        $tam = (Get-Item (Join-Path $Destino "librdpshim.dll")).Length
+        Nota "librdpshim.dll — $tam bytes"
+    } else {
+        throw "compilação do librdpshim.dll não gerou o arquivo esperado"
+    }
+}
+
 # ---------------------------------------------------- passo 5: aplicacao
 function Instalar-Aplicacao {
     Azul "[5/5] instalando o Acessos em $Destino"
     New-Item -ItemType Directory -Force -Path $Destino | Out-Null
 
     $modulos = @("acessos.py", "vncwidget.py", "sftp.py", "cofre.py", "tema.py",
-                 "rdp_windows.py", "ssh_windows.py", "win_embed.py",
+                 "rdp_shim.py", "rdpwidget.py", "ssh_windows.py",
                  "conpty.py", "bandeja_windows.py", "atualizador.py",
                  "dialogo_ui.py", "massa.py", "massa_ui.py",
                  "importar_rdm.py")
@@ -653,6 +660,7 @@ Garantir-Msys2
 Instalar-PacotesMsys2
 Instalar-PacotesPython
 Compilar-Vncshim
+Compilar-Rdpshim
 Instalar-Aplicacao
 
 # BASELINE PARA O ATUALIZAR.PS1: sem isto, a primeira vez que alguem rodar
@@ -686,10 +694,6 @@ Ok "pronto."
 Write-Host ""
 Nota "Rodar: pelo menu Iniciar > Acessos, ou $Destino\acessos.cmd"
 Write-Host ""
-if (-not $SemRdp) {
-    Nota "RDP embutido via FreeRDP + SetParent (ver win_embed.py)."
-} else {
-    Nota "RDP pulado (-SemRdp). A aba de RDP ficará desabilitada até"
-    Nota "o FreeRDP para Windows ser instalado manualmente."
-}
+Nota "RDP embutido via librdpshim.dll (linka libfreerdp/libwinpr direto,"
+Nota "sem processo externo — ver RDPSHIM-interno.md, não publicado)."
 Nota "SSH usa o ssh.exe nativo do Windows, hospedado via ConPTY."
