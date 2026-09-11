@@ -758,19 +758,28 @@ disponível nesta sessão).
    isso, `windows.h` traz `shellapi.h`, cujas macros `NIIF_*` colidem
    com os enums de mesmo nome em `freerdp/rail.h`.
 
-**O que falta pra virar produção** (nenhum destes é um bloqueio
-conhecido, só trabalho ainda não feito):
-- Confirmar uma sessão que autentica com sucesso e chega a pintar o
-  `gdi->primary_buffer` (só testado até a rejeição de credencial)
-- Mapear teclado (VK do GTK → scancode PS/2 que
-  `freerdp_input_send_keyboard_event` espera — reaproveitar a tabela
-  que `ssh_windows.py`/`conpty.py` já têm) e mouse (`PTR_FLAGS_*`)
-- Integrar num widget GTK nos moldes do `vncwidget.py` (Cairo lendo
-  `rs_framebuffer()` direto), substituindo `rdp_windows.py`/`win_embed.py`
-- Decidir o que fazer com os canais dinâmicos que o `wfreerdp.exe` de
-  hoje usa (clipboard, redirecionamento de unidade) — de fora desta
-  primeira versão de propósito
+**Integrado em produção em 2026-09-11** (branch
+`substituir-freerdp-por-rdpshim`, aguardando teste do usuário antes do
+merge): `rdp_windows.py`/`win_embed.py` removidos; `acessos.py` agora
+importa `rdp_shim.py` (fábrica `construir()`, mesmo padrão, usando
+`rdpwidget.RdpWidget`). `Acessos.spec`/`compilar_exe.ps1`/
+`instalar.ps1`/`gerar_manifesto.ps1` atualizados — FreeRDP dev passa a
+ser pacote ESSENCIAL (era opcional via `-SemRdp`, que saiu). GdkWin32
+(typelib) também saiu — só existia para o `win_embed.py` achar HWND via
+`SetParent`.
 
-`rdpshim.c` e o script de teste isolado ficaram fora do repositório
-(scratch de investigação, ainda não integrado) — retomar quando a
-integração completa (Python + GTK + input) for priorizada.
+**Testado de ponta a ponta com o `.exe` compilado de verdade**
+(`compilar_exe.ps1` completo, PATH mínimo sem MSYS2): app abre limpo,
+card RDP aparece, aba conecta contra RDP local, autenticação rejeitada
+(senha errada de propósito) aparece certinho no chip da aba ("Logon
+failed", `0x00020014`), sem crash, `log.txt` limpo. Tamanho do bundle:
+~206 MB (praticamente igual ao esquema antigo — confirma a análise de
+que o peso é da pilha de codecs do FreeRDP, não do `wfreerdp.exe` em
+si; ver a pesquisa acima).
+
+**Ainda não confirmado** (mesma lacuna de antes): uma sessão que
+autentica com SUCESSO e chega a pintar tela — só testado até a
+rejeição de credencial. Teclado/mouse (mapeados em `rdpwidget.py`, ver
+`RDPSHIM-interno.md`, não publicado) também dependem desse teste pra
+confirmar de verdade. Canais dinâmicos (clipboard, redirecionamento de
+unidade) continuam de fora, de propósito.

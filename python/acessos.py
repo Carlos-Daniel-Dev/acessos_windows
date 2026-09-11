@@ -124,11 +124,13 @@ except Exception as e:
 # externo (classe AbaRdp), que continua sendo o caminho padrao do projeto.
 #
 # NO WINDOWS nao existe gtk-frdp nem Gtk.Socket (XEmbed e coisa do X11); o
-# RDP embutido usa FreeRDP para Windows + SetParent, via rdp_windows.py.
-# Ver esse arquivo para o porque de nao ser mstsc.exe.
+# RDP embutido linka libfreerdp/libwinpr direto via shim em C, via
+# rdp_shim.py (substitui o antigo rdp_windows.py — processo externo
+# wfreerdp.exe + SetParent — ver RDPSHIM-interno.md, nao publicado,
+# para o porque e o fluxo completo).
 if sys.platform == "win32":
     try:
-        import rdp_windows as _rdp_win
+        import rdp_shim as _rdp_win
         TEM_RDP_WINDOWS, ERRO_RDP_WINDOWS = True, ""
     except Exception as e:
         _rdp_win, TEM_RDP_WINDOWS, ERRO_RDP_WINDOWS = None, False, str(e)
@@ -4217,7 +4219,7 @@ if sys.platform == "win32" and TEM_RDP_WINDOWS:
             AbaBase, CapturaTeclado, add_class=add_class, rotulo=rotulo)
     except Exception as e:
         AbaRdpWindows = None
-        ERRO_RDP_WINDOWS = "rdp_windows.construir falhou: %s" % e
+        ERRO_RDP_WINDOWS = "rdp_shim.construir falhou: %s" % e
 
 if sys.platform == "win32":
     # No Windows nao ha VTE: o terminal e hospedado via ConPTY, com um
@@ -6327,9 +6329,10 @@ class Janela(Gtk.Window):
             if AbaRdpWindows is None:
                 self.avisar(
                     "RDP indisponível",
-                    "%s\n\nInstale o FreeRDP para Windows "
-                    "(winget install FreeRDP.FreeRDP) e rode o instalar.ps1."
-                    % (ERRO_RDP_WINDOWS or "módulo rdp_windows ausente"))
+                    "%s\n\nlibrdpshim.dll precisa estar ao lado de "
+                    "acessos.py/Acessos.exe — rode o instalar.ps1 de novo "
+                    "(ou recompile com compilar_exe.ps1)."
+                    % (ERRO_RDP_WINDOWS or "módulo rdp_shim ausente"))
                 return
             classe_rdp = AbaRdpWindows
             if not cx.tem_rdp:

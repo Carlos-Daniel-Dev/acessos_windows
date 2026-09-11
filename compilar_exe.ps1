@@ -16,15 +16,18 @@
 #     .\compilar_exe.ps1 -PularVncshim  reusa um libvncshim.dll já
 #                                       compilado antes (mais rápido para
 #                                       iterar quando só o .py mudou)
-#     .\compilar_exe.ps1 -SemRdp        não embute o FreeRDP (bundle bem
-#                                       menor; RDP fica exigindo instalação
-#                                       à parte, como hoje no instalar.ps1)
+#     .\compilar_exe.ps1 -PularRdpshim  idem, para o librdpshim.dll
+#
+#  RDP: linkado direto (rdpshim.c/librdpshim.dll — ver RDPSHIM-interno.md,
+#  não publicado), sem processo externo. Não é mais opcional/pulável
+#  como o wfreerdp.exe embutido era antes (-SemRdp saiu) — RDP faz parte
+#  do bundle sempre, igual VNC.
 
 [CmdletBinding()]
 param(
     [switch]$Console,
     [switch]$PularVncshim,
-    [switch]$SemRdp
+    [switch]$PularRdpshim
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,9 +94,9 @@ Ok "  PyInstaller ok"
 # --------------------------------------------------- 2. vncshim.dll fresco
 $DllOrigem = Join-Path $PastaBuild "libvncshim.dll"
 if ($PularVncshim -and (Test-Path $DllOrigem)) {
-    Azul "[2/4] libvncshim.dll (reaproveitado, -PularVncshim)"
+    Azul "[2/5] libvncshim.dll (reaproveitado, -PularVncshim)"
 } else {
-    Azul "[2/4] compilando libvncshim.dll"
+    Azul "[2/5] compilando libvncshim.dll"
     $origemC = (Join-Path $Aqui "src\vncshim.c") -replace '\\', '/'
     $destinoDll = ($DllOrigem) -replace '\\', '/'
     $comando = @"
@@ -109,43 +112,64 @@ gcc -shared -O2 -Wall -o '$destinoDll' '$origemC' \
 }
 Ok "  libvncshim.dll — $((Get-Item $DllOrigem).Length) bytes"
 
-# --------------------------------------------------- 2b. FreeRDP (opcional)
+# -------------------------------------------------- 2b. rdpshim.dll fresco
 #
-# --add-binary do PyInstaller so copia o arquivo pedido — ele NAO analisa
-# as dependencias de um executavel EXTERNO (isso so acontece para o proprio
-# interpretador Python e as extensoes .pyd). wfreerdp.exe sozinho no bundle
-# falharia ao abrir uma conexao, sem libfreerdp3.dll/libwinpr3.dll e toda a
-# pilha de codecs de video (ffmpeg, x264, x265, vpx...) que ele linka. O
-# resolver_dlls.sh percorre esse grafo de dependencias recursivamente.
-$AddBinariesRdp = @()
-if (-not $SemRdp) {
-    Azul "[2b/4] resolvendo dependências do FreeRDP"
-    $WfreerdpOrigem = Join-Path $Mingw64 "bin\wfreerdp.exe"
-    if (-not (Test-Path $WfreerdpOrigem)) {
-        Nota "wfreerdp.exe não encontrado em $Mingw64\bin — pulando (RDP"
-        Nota "ficará exigindo o FreeRDP instalado à parte, como hoje)"
-    } else {
-        $ListaDeps = Join-Path $PastaBuild "freerdp_deps.txt"
-        $resolverPosix = (Join-Path $Aqui "resolver_dlls.sh") -replace '\\', '/'
-        $listaPosix = ($ListaDeps -replace '\\', '/')
-        $codigo = Msys2Exec "bash '$resolverPosix' wfreerdp.exe '$listaPosix'"
-        if ($codigo -ne 0 -or -not (Test-Path $ListaDeps)) {
-            Erro "falha ao resolver dependências do FreeRDP (código $codigo)"
-            exit 1
-        }
-        $nomes = Get-Content $ListaDeps | Where-Object { $_ -ne "" }
-        foreach ($nome in $nomes) {
-            $caminho = Join-Path $Mingw64 "bin\$nome"
-            if (Test-Path $caminho) {
-                $AddBinariesRdp += (($caminho -replace '\\', '/') + ";.")
-            }
-        }
-        Ok "  $($AddBinariesRdp.Count) arquivo(s) do FreeRDP (wfreerdp.exe + dependências)"
+# Mesma receita do vncshim: linka libfreerdp/libwinpr direto (ver
+# src/rdpshim.c e RDPSHIM-interno.md, não publicado). __STDC_NO_THREADS__
+# contorna um <threads.h> ausente neste MSYS2 (achado testando — ver doc
+# interna); WIN32_LEAN_AND_MEAN já está no próprio rdpshim.c.
+$RdpshimDllOrigem = Join-Path $PastaBuild "librdpshim.dll"
+if ($PularRdpshim -and (Test-Path $RdpshimDllOrigem)) {
+    Azul "[2b/5] librdpshim.dll (reaproveitado, -PularRdpshim)"
+} else {
+    Azul "[2b/5] compilando librdpshim.dll"
+    $origemC = (Join-Path $Aqui "src\rdpshim.c") -replace '\\', '/'
+    $destinoDll = ($RdpshimDllOrigem) -replace '\\', '/'
+    $comando = @"
+export PATH=/mingw64/bin:`$PATH
+gcc -shared -O2 -Wall -D__STDC_NO_THREADS__ -o '$destinoDll' '$origemC' \
+    `$(pkg-config --cflags --libs freerdp-client3 freerdp3 winpr3) -lws2_32
+"@
+    $codigo = Msys2Exec $comando
+    if ($codigo -ne 0 -or -not (Test-Path $RdpshimDllOrigem)) {
+        Erro "falha ao compilar librdpshim.dll (código $codigo)"
+        exit 1
     }
 }
+Ok "  librdpshim.dll — $((Get-Item $RdpshimDllOrigem).Length) bytes"
+
+# ---------------------------------------- 2c. dependências do rdpshim.dll
+#
+# --add-binary do PyInstaller so copia o arquivo pedido — ele NAO analisa
+# as dependencias de um binario nosso (isso so acontece para o proprio
+# interpretador Python e as extensoes .pyd). librdpshim.dll sozinho no
+# bundle falharia ao carregar, sem libfreerdp3.dll/libwinpr3.dll e toda a
+# pilha de codecs de video (ffmpeg, x264, x265, vpx...) que elas linkam.
+# O resolver_dlls.sh percorre esse grafo de dependencias recursivamente,
+# a partir do PROPRIO librdpshim.dll (fora de mingw64/bin — ver o
+# suporte a caminho completo adicionado no script).
+Azul "[2c/5] resolvendo dependências do librdpshim.dll"
+$ListaDeps = Join-Path $PastaBuild "rdpshim_deps.txt"
+$resolverPosix = (Join-Path $Aqui "resolver_dlls.sh") -replace '\\', '/'
+$rdpshimPosix = ($RdpshimDllOrigem -replace '\\', '/')
+$listaPosix = ($ListaDeps -replace '\\', '/')
+$codigo = Msys2Exec "bash '$resolverPosix' '$rdpshimPosix' '$listaPosix'"
+if ($codigo -ne 0 -or -not (Test-Path $ListaDeps)) {
+    Erro "falha ao resolver dependências do librdpshim.dll (código $codigo)"
+    exit 1
+}
+$AddBinariesRdp = @()
+$nomes = Get-Content $ListaDeps | Where-Object { $_ -ne "" }
+foreach ($nome in $nomes) {
+    $caminho = Join-Path $Mingw64 "bin\$nome"
+    if (Test-Path $caminho) {
+        $AddBinariesRdp += (($caminho -replace '\\', '/') + ";.")
+    }
+}
+Ok "  $($AddBinariesRdp.Count) DLL(s) de dependência do RDP (libfreerdp/libwinpr + codecs)"
 
 # --------------------------------------------------- 3. empacotar
-Azul "[3/4] empacotando com PyInstaller (Acessos.spec, --onedir)"
+Azul "[3/5] empacotando com PyInstaller (Acessos.spec, --onedir)"
 if (Test-Path $PastaDist) { Remove-Item -Recurse -Force $PastaDist }
 
 # A partir daqui, quem decide COMO empacotar é Acessos.spec (mantido a
@@ -169,17 +193,12 @@ if (-not (Test-Path $env:ACESSOS_ICONE)) {
     $env:ACESSOS_ICONE = ""
 }
 $env:ACESSOS_VNCSHIM_DLL = $DllOrigem
-$env:ACESSOS_GDKWIN32_TYPELIB = Join-Path $Mingw64 "lib\girepository-1.0\GdkWin32-3.0.typelib"
+$env:ACESSOS_RDPSHIM_DLL = $RdpshimDllOrigem
 $env:ACESSOS_MINGW64_BIN = Join-Path $Mingw64 "bin"
-if ($AddBinariesRdp.Count -gt 0) {
-    # a mesma lista de nomes de arquivo que resolver_dlls.sh gravou —
-    # Acessos.spec resolve o caminho completo sozinho, a partir de
-    # ACESSOS_MINGW64_BIN acima (evita duplicar a lista aqui, ja
-    # calculada no passo 2b)
-    $env:ACESSOS_FREERDP_DEPS_TXT = Join-Path $PastaBuild "freerdp_deps.txt"
-} else {
-    $env:ACESSOS_FREERDP_DEPS_TXT = ""
-}
+# a mesma lista de nomes de arquivo que resolver_dlls.sh gravou no passo
+# 2c — Acessos.spec resolve o caminho completo sozinho, a partir de
+# ACESSOS_MINGW64_BIN acima (evita duplicar a lista aqui)
+$env:ACESSOS_RDPSHIM_DEPS_TXT = $ListaDeps
 
 $specPosix = ($SpecFile -replace '\\', '/')
 $distPosix = ($PastaDist -replace '\\', '/')
@@ -201,13 +220,13 @@ if (-not (Test-Path $ExeFinal)) {
 }
 
 # --------------------------------------------------- 4. relatorio
-Azul "[4/4] pronto"
+Azul "[5/5] pronto"
 $tamanho = "{0:N0}" -f ((Get-ChildItem -Recurse (Split-Path $ExeFinal) |
                          Measure-Object -Property Length -Sum).Sum / 1MB)
 Ok "  $ExeFinal"
 Nota "  tamanho total da pasta: ~$tamanho MB"
 Nota "  modo: $(if ($Console) { 'console visível' } else { 'janela (sem console) — log em %LOCALAPPDATA%\acessos\log.txt' })"
-Nota "  RDP: $(if ($AddBinariesRdp.Count -gt 0) { 'embutido (wfreerdp.exe + dependências, sem pré-requisito)' } else { 'NAO embutido — precisa de FreeRDP instalado à parte' })"
+Nota "  RDP: embutido via librdpshim.dll (linkado direto, sem processo externo) — $($AddBinariesRdp.Count) DLL(s) de dependência"
 Write-Host ""
 Nota "testar: $ExeFinal"
 Nota "para simular uma máquina sem MSYS2, rode numa sessão com PATH mínimo"
