@@ -539,6 +539,37 @@ headerbar.dlg-topo button.perigo:hover {
     background-color: %(erro_h)s; border-color: %(erro_h)s;
 }
 .acao:hover            { background-color: %(acao_hover)s; }  /* so cor */
+
+/* aviso de atualizacao no rodape: ambar e a cor de "precisa de voce" no
+   resto da interface (ver .faixa-decisao acima) — o botao usa a mesma
+   linguagem visual para o mesmo tipo de aviso. */
+.btn-atualizacao, .btn-atualizacao label {
+    background-color: %(atencao_bg)s; color: %(atencao_fg)s;
+    background-image: none; box-shadow: none;
+}
+.btn-atualizacao {
+    border: 1px solid %(atencao_fg)s; border-radius: 6px;
+    padding: 2px 10px; min-height: 0px;
+    font-family: """ + SANS + """; font-size: 11px; font-weight: 600;
+}
+.btn-atualizacao:hover, .btn-atualizacao:hover label {
+    background-color: %(atencao_fg)s; color: %(atencao_bg)s;
+}
+
+/* estado de repouso do mesmo botao: so a versao instalada, discreta, no
+   canto inferior esquerdo — vira .btn-atualizacao quando ha novidade. */
+.btn-versao, .btn-versao label {
+    background-color: transparent; color: %(fraco)s;
+    background-image: none; box-shadow: none;
+}
+.btn-versao {
+    border: 1px solid transparent; border-radius: 6px;
+    padding: 2px 10px; min-height: 0px;
+    font-family: """ + MONO + """; font-size: 11px;
+}
+.btn-versao:hover, .btn-versao:hover label {
+    background-color: %(hover)s; color: %(texto)s;
+}
 .acao:hover label      { color: %(acao_txt)s; }
 .acao:disabled         { background-color: %(borda)s; border-color: %(borda)s; color: %(fraco)s; }
 .acao:disabled label   { color: %(fraco)s; }
@@ -578,6 +609,22 @@ headerbar.dlg-topo button.perigo:hover {
    e glifos de emoji tem alturas diferentes — sem travar, a barra de sessao
    inteira mudava de altura a cada clique */
 .tog-glifo { font-size: 13px; padding: 0px 7px; min-height: 20px; }
+
+/* icone clicavel DENTRO DE UMA LINHA DE LISTA (chaveiro: editar/remover).
+   EventBox comum, NAO Gtk.Button: nesta maquina o Gtk.Button mostrava um
+   retangulo branco solido ao passar o mouse (e piscava ao clicar) — o
+   prelight nativo do tema sobre o icone saindo errado, provavelmente
+   ligado ao carregador de pixbuf quebrado (aviso no log: "Could not load
+   a pixbuf from icon theme"). Sem Button nenhum envolvido, so pinta o
+   que a classe "icone-hover" manda — ligada e desligada em Python, ver
+   chaveiro.py:_clicavel(). */
+.icone-clicavel { background-color: transparent; padding: 3px 6px; }
+.icone-clicavel.icone-hover { background-color: %(borda2)s; }
+/* icone symbolic dentro do botao NAO herda a cor do container de forma
+   confiavel — mesma observacao ja registrada em icone_acao(): a cor
+   precisa ir na PROPRIA imagem. */
+.icone-perigo { color: %(erro_fg)s; }
+.icone-perigo.icone-hover { background-color: %(erro_bg)s; }
 .tog-bloq:checked, .tog-bloq:checked:hover {
     background-color: %(erro_bg)s; border-color: %(erro_fg)s;
     color: %(erro_fg)s;
@@ -652,7 +699,62 @@ headerbar.dlg-topo button.perigo:hover {
     font-family: """ + MONO + """; font-size: 9px;
     letter-spacing: 1px; color: %(fraco)s;
 }
-.lista:selected { background-color: %(sel)s; color: %(sel_txt)s; }
+/* :selected/:hover no NODE DA LINHA ("row"), nao no da TreeView/ListBox.
+   A regra antiga era ".lista:selected" — pseudo-classe no proprio
+   widget, que nunca entra em estado "selected"; quem recebe :selected e
+   :hover e o node "row" dentro dele (GtkTreeView E GtkListBoxRow usam o
+   MESMO nome de node, "row"). Repetido em variantes (:focus, :backdrop,
+   "cell") porque a estrutura de nodes mudou entre versoes do GTK3. */
+.lista row:selected, .lista row:selected:focus, .lista row:selected:backdrop,
+.lista cell:selected {
+    background-color: %(sel)s; color: %(sel_txt)s;
+}
+/* O "color" acima vale para a row, mas NAO para um rotulo dentro dela que
+   tenha cor propria: ".opcao-txt" fixa "color: texto", e cor definida no
+   proprio node vence heranca, sempre. Resultado: fundo invertido (preto no
+   tema claro, branco no escuro) com o texto na cor do tema NAO invertido —
+   preto no preto, branco no branco. Todo descendente da linha selecionada
+   passa a usar sel_txt, com especificidade maior que a de uma classe so. */
+.lista row:selected label, .lista row:selected:focus label,
+.lista row:selected:backdrop label {
+    color: %(sel_txt)s;
+}
+.lista row { border-bottom: 1px solid %(borda)s; }
+.lista row:last-child { border-bottom: none; }
+.lista row:hover { background-color: %(borda2)s; }
+/* Adwaita 3.24+ desenha row com MARGEM e CANTO ARREDONDADO proprios (o
+   visual moderno de "boxed list", cada linha um cartao flutuante com
+   respiro em volta) — mesmo com o fundo certo, a margem deixava o fundo
+   BRANCO do dialogo aparecer ao redor de cada linha, parecendo uma
+   caixa solta em vez de uma lista continua. Zerado em TODOS os estados,
+   nao so no normal: sem isso o efeito so sumia com o mouse parado.
+   box-shadow fica none tambem em TODO estado — so o border-bottom acima
+   e que desenha risco, de proposito, um por linha. */
+.lista row, .lista row:hover, .lista row:focus, .lista row:active,
+.lista row:selected {
+    box-shadow: none; outline: none;
+    margin: 0px; border-radius: 0px;
+}
+/* anel de foco do teclado aparecia como uma caixa clara em volta so do
+   TEXTO (nao da linha inteira) — o rotulo/botao dentro da linha e que
+   vira "filho de foco" da row, entao o :focus tem de ser zerado em
+   QUALQUER descendente, nao so na propria row. */
+.lista row *, .lista row *:focus, .lista row *:hover {
+    outline: none; outline-width: 0px; box-shadow: none;
+}
+
+/* linha do chaveiro: Gtk.EventBox comum, hover ligado A MAO em Python
+   (classe "linha-hover"), NAO pseudo-classe do GTK — ver abrir_gerenciador
+   em chaveiro.py para o motivo (Gtk.ListBoxRow carregava foco/prelight
+   proprios que nenhuma combinacao de CSS conseguia neutralizar de vez). */
+.linha-item { background-color: %(cartao)s; }
+.linha-item.linha-hover { background-color: %(borda2)s; }
+/* box.sem-fundo, NAO .sem-fundo: precisa empatar em especificidade com
+   "dialog, .acessos-dialogo box, ... { background-color: %(cartao)s; }"
+   (mais acima) — que pinta QUALQUER Gtk.Box de solido — para entao
+   ganhar por ordem (esta regra vem depois). Usada na caixa interna da
+   linha do chaveiro, que senao ficava branca por cima do hover cinza. */
+box.sem-fundo { background-color: transparent; }
 
 .lista header button {
     background-image: none;
@@ -1042,8 +1144,19 @@ headerbar.dlg-topo { border-bottom: 1px solid %(borda2)s; }
 /* linha de opcao em painel: texto no corpo, nao em mono */
 .opcao-txt { color: %(texto)s; font-size: 12.5px; }
 
-/* separador horizontal entre secoes de um dialogo */
-.regua-h { background-color: %(borda)s; min-height: 1px; }
+/* separador horizontal entre secoes de um dialogo. borda2, nao borda: a
+   borda fraca e quase invisivel sobre o cartao (#e3e8ec no branco), e as
+   secoes do painel de Ajustes pareciam jogadas sem nenhuma linha entre
+   elas — borda2 e a mesma cor ja usada nas bordas que realmente precisam
+   aparecer (cards, campos, rodape da headerbar). */
+/* "box.regua-h", nao ".regua-h": dentro de dialogo a regra generica
+   "dialog, .acessos-dialogo box, ... { background-color: %(cartao)s; }"
+   (mais acima) tem especificidade MAIOR (elemento+classe vs so classe) e
+   pintava por cima da divisoria, deixando-a invisivel em toda tela de
+   dialogo do app — Ajustes, editor de conexao, chaveiro. Igualando a
+   especificidade (tambem elemento+classe) a ordem no arquivo decide, e
+   esta regra vem depois. */
+box.regua-h { background-color: %(borda2)s; min-height: 1px; }
 .vida-on     { background-color: %(ok_fg)s; }
 .vida-off    { background-color: %(erro_fg)s; }
 .grupo-titulo    { color: %(texto)s; font-family: """ + COND + """; font-size: 18px; font-weight: 600; }
