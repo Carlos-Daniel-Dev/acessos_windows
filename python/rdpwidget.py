@@ -1,39 +1,56 @@
 #!/usr/bin/env python3
-"""RdpWidget — Gtk.DrawingArea que fala RDP via libfreerdp, sem processo
-externo.
+# Copyright (C) 2026 Jurandir Moratelli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+"""RdpWidget — Gtk.DrawingArea que fala RDP via libfreerdp3, sem o gtk-frdp.
 
-Substitui (quando maduro — ver RDPSHIM-interno.md, não publicado) o
-esquema atual de rdp_windows.py, que abre wfreerdp.exe como processo
-externo e reparenta a janela dele (SetParent). Aqui o RDP desenha num
-framebuffer nosso — mesmo padrão do vncwidget.py/vncshim.c, só que contra
-libfreerdp/libwinpr em vez de libvncclient.
+MESMA RAZAO DE SER DO VncWidget (vncwidget.py): falar direto com a
+libfreerdp, atraves do shim em C (librdpshim.so — ver rdpshim.c), em vez de
+depender da casca GObject do gtk-frdp. O gtk-frdp continua sendo a
+REFERENCIA de implementacao (foi de la que a logica de certificado, o
+pipeline grafico e a conversao de teclado foram portadas) — nao reinventamos
+o protocolo RDP, so trocamos quem desenha e quem processa a thread de rede,
+do mesmo jeito que ja fizemos com o VNC.
 
-ARQUITETURA
+ARQUITETURA (identica a do VNC)
+--------------------------------
+    thread de rede             thread principal (GTK)
+    --------------             ----------------------
+    rs_esperar/rs_processar    GLib.timeout_add (~60fps)
+    grava no framebuffer  -->  draw(): set_source_surface + paint
+                               (o Cairo aponta para A MESMA memoria do
+                                gdi->primary_buffer; sem copia por quadro)
+
+CERTIFICADO
 -----------
-    thread de rede            thread principal (GTK)
-    --------------            ----------------------
-    rs_esperar            -->   GLib.idle_add(...) so na conexao/queda
-    rs_processar               (atualizacao de tela NAO agenda idle_add
-    escreve em gdi->            por callback — mesmo motivo do VNC:
-    primary_buffer               disputa de GIL entre sessoes trava a
-                                  interface. Um relogio de ~60/s decide
-                                  quando repintar, olhando so a area
-                                  suja acumulada.)
+IgnoreCertificate=TRUE (lado libfreerdp) so evita que a lib RECUSE sozinha
+um certificado desconhecido antes mesmo de nos perguntar — necessario para
+o parque interno, onde os certificados sao autoassinados e a conexao por
+IP nunca bate com o nome do certificado. A DECISAO em si nunca e automatica:
+tanto o certificado NOVO quanto o certificado MUDADO sao perguntados ao
+operador (estilo SSH — "authenticity of host ... can't be established"),
+ver _c_certificado_novo/_c_certificado_mudou. So aceita quem confirmar.
 
-O acesso a libfreerdp/libwinpr nao e ctypes direto: passa pelo shim em C
-(rdpshim.c), porque rdpContext/rdpSettings tambem tem forma que muda por
-build — mesma razao do vncshim.c existir pro VNC. Ver rdpshim.c e
-RDPSHIM-interno.md (nao publicado, so nesta maquina) para o fluxo
-completo.
-
-ESTADO: em construcao, NAO usado por acessos.py ainda. rdp_windows.py
-continua sendo o caminho de producao.
-
-Sinais emitidos (mesmo vocabulario do vncwidget.py, pra facilitar troca):
-    rdp-connected      — TCP + TLS + NLA completos
-    rdp-initialized    — framebuffer pronto (gdi_init concluido)
-    rdp-disconnected   — sessao terminou
-    rdp-error(str)     — falhou; o texto explica
+PORTABILIDADE WINDOWS
+----------------------
+Este arquivo e o MESMO nos dois sistemas — so o nome/carregador do shim
+muda (librdpshim.so + CDLL no Linux, librdpshim.dll + WinDLL no Windows,
+ver _carregar_shim) e a chamada de teclado em _tecla()/rs_tecla (ver
+rs_tecla em rdpshim.c: o C tambem tem uma assinatura por plataforma pro
+mesmo motivo — GDK no backend Win32 entrega scancode PS/2 cru em
+hardware_keycode, nao keycode X11). Tudo o resto (certificado, clipboard,
+splash, resize dinamico, captura de teclado) e identico.
 """
 
 import ctypes
@@ -47,123 +64,197 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, GObject  # noqa: E402
 
+import dialogo_ui
 
-# --------------------------------------------------------------- shim
-#
-# Mesmo padrao do vncwidget.py: nome/carregador variam por plataforma,
-# mas este modulo so existe no Windows (RDP embutido no Linux usa
-# gtk-frdp/Gtk.Socket, ver acessos.py) — carregamento sempre via WinDLL.
-_NOME_SHIM = "librdpshim.dll"
+_NOME_SHIM = "librdpshim.dll" if sys.platform == "win32" else "librdpshim.so"
+_CARREGADOR = ctypes.WinDLL if sys.platform == "win32" else ctypes.CDLL
+
+# Teclas "estendidas" no PS/2 Set 1 (Windows) — o GDK nao expoe esse bit
+# separado do hardware_keycode, entao a lista e estatica. So usada no
+# ramo Windows de _tecla(); no Linux o C resolve isso via XKB.
+_TECLAS_ESTENDIDAS_WIN32 = None
+if sys.platform == "win32":
+    _TECLAS_ESTENDIDAS_WIN32 = {
+        Gdk.KEY_Up, Gdk.KEY_Down, Gdk.KEY_Left, Gdk.KEY_Right,
+        Gdk.KEY_Insert, Gdk.KEY_Delete, Gdk.KEY_Home, Gdk.KEY_End,
+        Gdk.KEY_Page_Up, Gdk.KEY_Page_Down,
+        Gdk.KEY_Num_Lock, Gdk.KEY_KP_Divide, Gdk.KEY_KP_Enter,
+        Gdk.KEY_Control_R, Gdk.KEY_Alt_R,
+        Gdk.KEY_Super_L, Gdk.KEY_Super_R, Gdk.KEY_Menu, Gdk.KEY_Print,
+    }
 
 
 def _carregar_shim():
-    """Mesma logica de _carregar_shim() em vncwidget.py — ver ali o
-    porque de sys._MEIPASS entrar na conta quando empacotado."""
+    """Acha o shim ao lado deste arquivo, ou no caminho do sistema.
+
+    EMPACOTADO (PyInstaller, so no Windows): __file__ nao aponta para um
+    diretorio de verdade — este modulo vem de dentro do bundle (PYZ).
+    sys._MEIPASS e onde os arquivos adicionados via --add-binary/--add-data
+    realmente estao. Ver vncwidget.py::_carregar_shim, mesma logica."""
     aqui = os.path.dirname(os.path.abspath(__file__))
     if getattr(sys, "frozen", False):
         aqui = getattr(sys, "_MEIPASS", aqui)
     for caminho in (os.path.join(aqui, _NOME_SHIM), _NOME_SHIM):
         try:
-            return ctypes.WinDLL(caminho)
+            return _CARREGADOR(caminho)
         except OSError:
             continue
-    raise OSError(
-        "%s nao encontrada. Compile com compilar_exe.ps1/instalar.ps1 — "
-        "ela precisa ficar ao lado de rdpwidget.py." % _NOME_SHIM)
+    return None
 
 
 _lib = _carregar_shim()
+TEM_FRDP_SHIM = _lib is not None
 
-CB_ATUALIZOU = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int,
-                                ctypes.c_int, ctypes.c_int, ctypes.c_int)
-CB_REDIMENSIONOU = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int,
-                                    ctypes.c_int)
-CB_DESCONECTOU = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32,
-                                  ctypes.c_char_p)
+if TEM_FRDP_SHIM:
+    CB_ATUALIZOU = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, ctypes.c_int)
+    CB_REDIMENSIONOU = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int,
+                                        ctypes.c_int)
+    CB_DESCONECTOU = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_char_p)
+    CB_CERT_NOVO = ctypes.CFUNCTYPE(
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint16,
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+        ctypes.c_uint32)
+    CB_CERT_MUDOU = ctypes.CFUNCTYPE(
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint16,
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32)
+    CB_CLIP_TEXTO = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_char_p,
+                                     ctypes.c_int)
+    CB_DISP_PRONTO = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
 
-_lib.rs_criar.restype = ctypes.c_void_p
-_lib.rs_criar.argtypes = [ctypes.c_void_p, CB_ATUALIZOU, CB_REDIMENSIONOU,
-                          CB_DESCONECTOU]
-_lib.rs_definir_credenciais.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
-                                        ctypes.c_char_p, ctypes.c_char_p]
-_lib.rs_definir_tela.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
-_lib.rs_definir_ignorar_certificado.argtypes = [ctypes.c_void_p, ctypes.c_int]
-_lib.rs_conectar.restype = ctypes.c_int
-_lib.rs_conectar.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
-_lib.rs_esperar.restype = ctypes.c_int
-_lib.rs_esperar.argtypes = [ctypes.c_void_p, ctypes.c_int]
-_lib.rs_processar.restype = ctypes.c_int
-_lib.rs_processar.argtypes = [ctypes.c_void_p]
-_lib.rs_framebuffer.restype = ctypes.c_void_p
-_lib.rs_framebuffer.argtypes = [ctypes.c_void_p]
-_lib.rs_largura.restype = ctypes.c_int
-_lib.rs_largura.argtypes = [ctypes.c_void_p]
-_lib.rs_altura.restype = ctypes.c_int
-_lib.rs_altura.argtypes = [ctypes.c_void_p]
-_lib.rs_morto.restype = ctypes.c_int
-_lib.rs_morto.argtypes = [ctypes.c_void_p]
-_lib.rs_tecla.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
-                          ctypes.c_int]
-_lib.rs_ponteiro.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
-                             ctypes.c_int]
-_lib.rs_destruir.argtypes = [ctypes.c_void_p]
-
-
-# ------------------------------------------------------- flags do winpr
-#
-# winpr/input.h — repetidos aqui porque so existem do lado C; o shim so
-# repassa inteiros crus (mesma disciplina do vncshim.c/ATALHOS do VNC).
-KBD_FLAGS_EXTENDED = 0x0100
-KBD_FLAGS_RELEASE = 0x8000
-
-PTR_FLAGS_WHEEL_NEGATIVE = 0x0100
-PTR_FLAGS_WHEEL = 0x0200
-PTR_FLAGS_MOVE = 0x0800
-PTR_FLAGS_DOWN = 0x8000
-PTR_FLAGS_BUTTON1 = 0x1000     # esquerdo
-PTR_FLAGS_BUTTON2 = 0x2000     # direito
-PTR_FLAGS_BUTTON3 = 0x4000     # meio
-
-# Teclas "estendidas" no PS/2 Set 1 — o GDK nao expoe esse bit separado
-# do hardware_keycode (ver RDPSHIM-interno.md), entao a lista e estatica.
-# hardware_keycode do GDK no backend Win32 JA E o scancode cru; so este
-# bit precisa de decisao em Python.
-_TECLAS_ESTENDIDAS = {
-    Gdk.KEY_Up, Gdk.KEY_Down, Gdk.KEY_Left, Gdk.KEY_Right,
-    Gdk.KEY_Insert, Gdk.KEY_Delete, Gdk.KEY_Home, Gdk.KEY_End,
-    Gdk.KEY_Page_Up, Gdk.KEY_Page_Down,
-    Gdk.KEY_Num_Lock, Gdk.KEY_KP_Divide, Gdk.KEY_KP_Enter,
-    Gdk.KEY_Control_R, Gdk.KEY_Alt_R,
-    Gdk.KEY_Super_L, Gdk.KEY_Super_R, Gdk.KEY_Menu, Gdk.KEY_Print,
-}
+    _lib.rs_criar.restype = ctypes.c_void_p
+    _lib.rs_criar.argtypes = [ctypes.c_void_p, CB_ATUALIZOU, CB_REDIMENSIONOU,
+                              CB_DESCONECTOU, CB_CERT_NOVO, CB_CERT_MUDOU,
+                              CB_CLIP_TEXTO, CB_DISP_PRONTO]
+    _lib.rs_clipboard_definir_texto.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    _lib.rs_definir_credenciais.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+    _lib.rs_conectar.restype = ctypes.c_int
+    _lib.rs_conectar.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    _lib.rs_esperar.restype = ctypes.c_int
+    _lib.rs_esperar.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    _lib.rs_processar.restype = ctypes.c_int
+    _lib.rs_processar.argtypes = [ctypes.c_void_p]
+    _lib.rs_framebuffer.restype = ctypes.c_void_p
+    _lib.rs_framebuffer.argtypes = [ctypes.c_void_p]
+    _lib.rs_largura.restype = ctypes.c_int
+    _lib.rs_largura.argtypes = [ctypes.c_void_p]
+    _lib.rs_altura.restype = ctypes.c_int
+    _lib.rs_altura.argtypes = [ctypes.c_void_p]
+    _lib.rs_stride.restype = ctypes.c_int
+    _lib.rs_stride.argtypes = [ctypes.c_void_p]
+    _lib.rs_morto.restype = ctypes.c_int
+    _lib.rs_morto.argtypes = [ctypes.c_void_p]
+    _lib.rs_erro_auth.restype = ctypes.c_int
+    _lib.rs_erro_auth.argtypes = [ctypes.c_void_p]
+    _lib.rs_erro_msg.restype = ctypes.c_char_p
+    _lib.rs_erro_msg.argtypes = [ctypes.c_void_p]
+    _lib.rs_ponteiro_mover.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    _lib.rs_ponteiro_botao.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                       ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    _lib.rs_ponteiro_roda.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    _lib.rs_pedir_resize.restype = ctypes.c_int
+    _lib.rs_pedir_resize.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    if sys.platform == "win32":
+        # rs_tecla(Sessao*, int scancode, int estendida, int pressionada)
+        _lib.rs_tecla.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int]
+    else:
+        # rs_tecla(Sessao*, uint32_t keycode_x11, int pressionada)
+        _lib.rs_tecla.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int]
+    _lib.rs_destruir.argtypes = [ctypes.c_void_p]
 
 
 class RdpWidget(Gtk.DrawingArea):
     __gsignals__ = {
-        "rdp-connected": (GObject.SignalFlags.RUN_FIRST, None, ()),
-        "rdp-initialized": (GObject.SignalFlags.RUN_FIRST, None, ()),
-        "rdp-disconnected": (GObject.SignalFlags.RUN_FIRST, None, ()),
-        "rdp-error": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "rdp-conectado": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "rdp-desconectado": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "rdp-erro": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
     def __init__(self):
         super().__init__()
+        if not TEM_FRDP_SHIM:
+            raise RuntimeError("%s indisponível" % _NOME_SHIM)
         self._sessao = None
         self._surface = None
+        self._buf = None
         self._remoto = (0, 0)
-        self._parar = threading.Event()
+        self._cx = None
+        self._usuario = None
+        self._senha = None
+        self._dominio = None
+        self._conectado = False
+        self._teclas_presas = set()
+        self._capturando = False
+        self._seat_grab = None
         self._sujo_rect = None
         self._lock_sujo = threading.Lock()
         self._lock = threading.Lock()
-        self._timer_bate = None
+        self._parar = threading.Event()
         self._thread = None
+        self._timer_bate = None
+        # gancho: decide sobre certificado MUDADO. Sem ele, RECUSA por
+        # seguranca (ver rs_criar/hook_certificado_mudou no shim).
+        self._ao_verificar_certificado = None
 
-        # Mesma regra do vncwidget.py: instancias de CFUNCTYPE PRECISAM
-        # ficar referenciadas em self, senao o GC coleta e o C chama
-        # endereco morto -> segfault.
+        # CLIPBOARD (canal CLIPRDR, so texto).
+        #
+        # HOST -> REMOTO: escutamos o "owner-change" do clipboard padrao do
+        # GTK; quando o operador copia algo no host, mandamos para o shim
+        # (que anuncia ao servidor). REMOTO -> HOST: o shim ja busca o texto
+        # sozinho quando o servidor avisa que o clipboard de la mudou (ver
+        # hook_clip_server_format_list no rdpshim.c) — aqui so recebemos e
+        # colocamos no clipboard do GTK.
+        #
+        # _texto_local_ultimo evita eco: sem isto, ao recebermos texto do
+        # remoto e colocarmos no clipboard do GTK, o proprio owner-change
+        # que isso dispara mandaria o mesmo texto de volta para o remoto.
+        self._clip = Gtk.Clipboard.get_default(Gdk.Display.get_default())
+        self._clip_handler = None
+        self._texto_local_ultimo = None
+
+        # SPLASH DE CARREGAMENTO.
+        #
+        # Confirmado contra servidor real: apos "rdp-conectado" a tela passa
+        # por uma sequencia BRANCO -> PRETO -> desktop de verdade, que e o
+        # proprio Windows preparando a sessao (nao e bug nosso — o xfreerdp
+        # e o Remmina mostram a mesma coisa). Sem isto o operador via uma
+        # tela branca/preta por 1-2s achando que travou.
+        #
+        # Criterio de saida, o que vier primeiro:
+        #   - N atualizacoes de tela reais (EndPaint) desde o connect: o
+        #     desktop comecou a desenhar de verdade;
+        #   - um teto de tempo, para nao segurar o splash para sempre se o
+        #     servidor for lento a desenhar (o splash so e cosmetico).
+        self._splash = False
+        self._splash_pinturas = 0
+        self._timer_splash = None
+        self._SPLASH_MIN_PINTURAS = 4
+        self._SPLASH_TETO_MS = 4000
+
+        # AJUSTE DINAMICO (canal Display Control / "disp").
+        #
+        # Ao contrario do gtk-frdp — onde o ajuste de tamanho por escala
+        # (set_scaling) dava tela branca com matriz nao inversivel — aqui
+        # pedimos ao PROPRIO SERVIDOR que redesenhe na resolucao nova
+        # (SendMonitorLayout), o mesmo que o /dynamic-resolution do
+        # xfreerdp ja fazia neste projeto. Sem essa dependencia de escala
+        # local, o problema antigo nao se aplica.
+        self._escalar = True
+        self._timer_resize = None
+        self._pedido_pendente = None
+        self._ultimo_pedido = None      # evita reenviar o mesmo tamanho
+
         self._cb_at = CB_ATUALIZOU(self._c_atualizou)
         self._cb_rz = CB_REDIMENSIONOU(self._c_redimensionou)
         self._cb_desc = CB_DESCONECTOU(self._c_desconectou)
+        self._cb_cn = CB_CERT_NOVO(self._c_certificado_novo)
+        self._cb_cm = CB_CERT_MUDOU(self._c_certificado_mudou)
+        self._cb_clip = CB_CLIP_TEXTO(self._c_clip_texto)
+        self._cb_disp = CB_DISP_PRONTO(self._c_disp_pronto)
 
         self.set_can_focus(True)
         self.add_events(
@@ -173,6 +264,7 @@ class RdpWidget(Gtk.DrawingArea):
             | Gdk.EventMask.SCROLL_MASK
             | Gdk.EventMask.KEY_PRESS_MASK
             | Gdk.EventMask.KEY_RELEASE_MASK
+            | Gdk.EventMask.ENTER_NOTIFY_MASK
             | Gdk.EventMask.FOCUS_CHANGE_MASK)
 
         self.connect("draw", self._desenhar)
@@ -182,53 +274,75 @@ class RdpWidget(Gtk.DrawingArea):
         self.connect("scroll-event", self._roda)
         self.connect("key-press-event", self._tecla)
         self.connect("key-release-event", self._tecla)
+        self.connect("enter-notify-event", self._entrou)
         self.connect("focus-out-event", self._perdeu_foco)
+        self.connect("size-allocate", self._realocou)
         self.connect("destroy", lambda *_a: self.desconectar())
 
-    # ---------------------------------------------------- ciclo de vida
-    def conectar(self, host, porta, usuario=None, senha=None, dominio=None,
-                largura=1024, altura=768, ignorar_certificado=True):
-        if self._sessao is not None:
-            self.desconectar()
-        self._parar.clear()
-        self._sessao = _lib.rs_criar(None, self._cb_at, self._cb_rz,
-                                     self._cb_desc)
-        if not self._sessao:
-            self.emit("rdp-error", "falha ao criar sessão RDP")
-            return
+    # ------------------------------------------------------------ ciclo
+    def definir_credenciais(self, usuario=None, senha=None, dominio=None):
+        self._usuario = usuario
+        self._senha = senha
+        self._dominio = dominio
 
-        _lib.rs_definir_credenciais(
-            self._sessao,
-            (usuario or "").encode("utf-8"),
-            (senha or "").encode("utf-8"),
-            (dominio or "").encode("utf-8"))
-        _lib.rs_definir_tela(self._sessao, int(largura), int(altura))
-        _lib.rs_definir_ignorar_certificado(
-            self._sessao, 1 if ignorar_certificado else 0)
+    def conectar(self, host, porta=3389, usuario=None, senha=None,
+                 dominio=None, escalar=False):
+        if not TEM_FRDP_SHIM:
+            self.emit("rdp-erro", "%s indisponível" % _NOME_SHIM)
+            return False
+        self.desconectar()
+        self._parar.clear()
+        self._conectado = False
+        self._cx = (host, int(porta))
+        self._splash = True
+        self._splash_pinturas = 0
+        self._ultimo_pedido = None
+        if usuario is not None:
+            self._usuario = usuario
+        if senha is not None:
+            self._senha = senha
+        if dominio is not None:
+            self._dominio = dominio
+
+        self._sessao = _lib.rs_criar(None, self._cb_at, self._cb_rz,
+                                     self._cb_desc, self._cb_cn, self._cb_cm,
+                                     self._cb_clip, self._cb_disp)
+        if not self._sessao:
+            self.emit("rdp-erro", "falha ao criar sessão RDP")
+            return False
+
+        u = (self._usuario or "").encode("utf-8")
+        p = (self._senha or "").encode("utf-8")
+        d = (self._dominio or "").encode("utf-8")
+        _lib.rs_definir_credenciais(self._sessao, u, p, d)
 
         if self._timer_bate is None:
             self._timer_bate = GLib.timeout_add(16, self._bater)
+        if self._clip_handler is None:
+            self._clip_handler = self._clip.connect(
+                "owner-change", self._clip_mudou_no_host)
         self._thread = threading.Thread(
-            target=self._rodar, args=(host, porta), daemon=True)
+            target=self._rodar, args=(host, int(porta)), daemon=True)
         self._thread.start()
+        return True
 
     def _rodar(self, host, porta):
-        """Thread de rede. Nada de GTK aqui — tudo volta por idle_add,
-        mesma disciplina do vncwidget.py._rodar.
-
-        Em falha, NAO reporta erro genérico aqui: cb_post_disconnect (ver
-        rdpshim.c) já é chamado pelo próprio FreeRDP em qualquer caminho
-        de falha de conexão — mesmo antes do handshake terminar — e
-        dispara _c_desconectou() com o motivo REAL (ex.: "Logon failed").
-        Emitir os dois era ruído: testado ao vivo, os dois sinais
-        chegavam juntos pra uma unica falha."""
+        """Thread de rede. Nada de GTK aqui — tudo volta por idle_add."""
         sessao = self._sessao
-        if not _lib.rs_conectar(sessao, host.encode("utf-8"), int(porta)):
+        ok = _lib.rs_conectar(sessao, host.encode("utf-8"), porta)
+        if not ok:
+            erro_auth = _lib.rs_erro_auth(sessao)
+            msg = (_lib.rs_erro_msg(sessao) or b"").decode("utf-8", "replace")
+            if erro_auth:
+                GLib.idle_add(self._falhou_auth, msg or "autenticação recusada")
+            else:
+                GLib.idle_add(self._falhou, msg or ("não foi possível conectar "
+                                                     "em %s:%s" % (host, porta)))
             return
         GLib.idle_add(self._conectou)
 
         while not self._parar.is_set():
-            n = _lib.rs_esperar(sessao, 200)     # 200ms
+            n = _lib.rs_esperar(sessao, 100)      # 100ms
             if n < 0:
                 break
             if n == 0:
@@ -238,29 +352,50 @@ class RdpWidget(Gtk.DrawingArea):
         GLib.idle_add(self._caiu)
 
     def desconectar(self):
+        self._conectado = False
+        self._splash = False
+        self._soltar_seat()
+        self.soltar_teclas()
         if self._timer_bate is not None:
             try:
                 GLib.source_remove(self._timer_bate)
             except Exception:
                 pass
             self._timer_bate = None
+        if self._timer_splash is not None:
+            try:
+                GLib.source_remove(self._timer_splash)
+            except Exception:
+                pass
+            self._timer_splash = None
+        if self._clip_handler is not None:
+            try:
+                self._clip.disconnect(self._clip_handler)
+            except Exception:
+                pass
+            self._clip_handler = None
+        if self._timer_resize is not None:
+            try:
+                GLib.source_remove(self._timer_resize)
+            except Exception:
+                pass
+            self._timer_resize = None
+        self._ultimo_pedido = None
         self._parar.set()
         t, self._thread = self._thread, None
 
         with self._lock:
             sessao, self._sessao = self._sessao, None
             self._surface = None
+            self._buf = None
         if sessao is None:
             return
 
-        # NAO DESTRUIR COM A THREAD VIVA — mesmo cuidado do vs_destruir
-        # no VNC. rs_destruir chama freerdp_disconnect/freerdp_free; se a
-        # thread de rede ainda estiver dentro de rs_processar (ela pode
-        # estar, ha sempre uma janela), e uso-apos-liberacao.
+        # MESMA REGRA DO VNC: nao destruir com a thread de rede viva. Ver
+        # a explicacao longa em vncwidget.py::desconectar.
         if t is None or t is threading.current_thread():
             _lib.rs_destruir(sessao)
             return
-
         t.join(timeout=0.5)
         if not t.is_alive():
             _lib.rs_destruir(sessao)
@@ -270,7 +405,7 @@ class RdpWidget(Gtk.DrawingArea):
 
         def _tentar():
             tentativas[0] += 1
-            if t.is_alive() and tentativas[0] < 60:      # ate ~30s
+            if t.is_alive() and tentativas[0] < 60:
                 return True
             try:
                 _lib.rs_destruir(sessao)
@@ -282,166 +417,504 @@ class RdpWidget(Gtk.DrawingArea):
 
     # ------------------------------------------------ vindos do C/thread
     def _c_atualizou(self, _ctx, x, y, w, h):
-        """THREAD DE REDE. So anota a area suja — ver _bater(). Mesma
-        razao do vncwidget.py: idle_add por callback disputa o GIL entre
-        sessoes e congela a interface."""
+        """Roda na THREAD DE REDE. Mesma logica do VNC: so anota a area
+        suja; quem desenha e o relogio _bater na thread principal."""
         with self._lock_sujo:
             if self._sujo_rect is None:
                 self._sujo_rect = [x, y, x + w, y + h]
             else:
                 r = self._sujo_rect
-                r[0] = min(r[0], x)
-                r[1] = min(r[1], y)
-                r[2] = max(r[2], x + w)
-                r[3] = max(r[3], y + h)
+                r[0] = min(r[0], x); r[1] = min(r[1], y)
+                r[2] = max(r[2], x + w); r[3] = max(r[3], y + h)
+            self._splash_pinturas += 1
 
     def _c_redimensionou(self, _ctx, w, h):
-        """THREAD DE REDE — chamado por cb_post_connect, uma vez, quando
-        gdi_init() termina e o framebuffer passa a existir."""
-        GLib.idle_add(self._aplicar_redimensionamento, w, h)
+        GLib.idle_add(self._redimensionou, w, h)
 
-    def _c_desconectou(self, _ctx, codigo, motivo):
-        """THREAD DE REDE — cb_post_disconnect."""
-        texto = motivo.decode("utf-8", "replace") if motivo else ""
-        GLib.idle_add(self._reportar_desconexao, codigo, texto)
+    def _c_desconectou(self, _ctx, _motivo):
+        pass    # o laco em _rodar ja trata o fim da sessao
 
-    def _aplicar_redimensionamento(self, w, h):
-        with self._lock:
-            self._remoto = (w, h)
-            self._surface = None      # recriada no proximo _desenhar
-        self.set_size_request(w, h)
-        self.emit("rdp-initialized")
+    def _perguntar_no_main_thread(self, funcao, *args):
+        """Ponte thread de rede -> thread principal para dialogos GTK.
+
+        Os callbacks de certificado do FreeRDP (VerifyCertificateEx e
+        VerifyChangedCertificateEx) rodam SINCRONOS dentro do
+        freerdp_connect, ou seja, na THREAD DE REDE (_rodar) — e a lib
+        espera nosso retorno antes de prosseguir o handshake. Criar um
+        Gtk.Dialog fora da thread principal e comportamento indefinido no
+        GTK. Por isso agendamos a exibicao real via GLib.idle_add (isso e
+        thread-safe: so enfileira) e bloqueamos aqui ate a thread principal
+        terminar o dialogo e responder — o handshake so ganha problema se o
+        operador demorar para responder, o que e o comportamento certo
+        (mesma logica do SSH esperando o "yes" no prompt)."""
+        pronto = threading.Event()
+        resultado = [False]
+
+        def _mostrar():
+            resultado[0] = funcao(*args)
+            pronto.set()
+            return False
+
+        GLib.idle_add(_mostrar)
+        pronto.wait()
+        return resultado[0]
+
+    def _c_certificado_novo(self, _ctx, host, porta, nome_comum, assunto,
+                            emissor, digital, flags):
+        """Certificado novo/autoassinado — perguntamos, no mesmo espirito
+        do SSH na primeira conexao a um host ("authenticity of host ...
+        can't be established"). NAO aceitamos calado: o parque pode ser
+        interno, mas quem decide se aquela impressao digital e a esperada
+        e o operador, nao o codigo."""
+        host_s = (host or b"").decode("utf-8", "replace")
+        digital_s = (digital or b"").decode("utf-8", "replace")
+        if self._ao_verificar_certificado is not None:
+            aceitar = self._ao_verificar_certificado(host_s, digital_s)
+        else:
+            aceitar = self._perguntar_no_main_thread(
+                self._perguntar_novo, host_s, digital_s)
+        return 1 if aceitar else 0
+
+    def _c_certificado_mudou(self, _ctx, host, porta, nome_comum, assunto,
+                             emissor, digital_novo, assunto_antigo,
+                             emissor_antigo, digital_antigo, flags):
+        """O certificado deste host MUDOU desde a ultima conexao aceita.
+
+        Rotina (maquina reinstalada / certificado regerado) OU alguem no
+        meio do caminho — o SSH trata a mesma situacao recusando ate
+        confirmacao. Perguntamos ao operador; aceitando, devolvemos 1 e a
+        propria libfreerdp substitui o certificado salvo."""
+        host_s = (host or b"").decode("utf-8", "replace")
+        digital_s = (digital_novo or b"").decode("utf-8", "replace")
+        if self._ao_verificar_certificado is not None:
+            aceitar = self._ao_verificar_certificado(host_s, digital_s)
+        else:
+            aceitar = self._perguntar_no_main_thread(
+                self._perguntar_mudanca, host_s, digital_s)
+        return 1 if aceitar else 0
+
+    def _perguntar_novo(self, host, digital):
+        """Dialogo estilo SSH na primeira conexao: mostra a impressao
+        digital e pede confirmacao antes de guardar o certificado.
+
+        Usa dialogo_ui — o MESMO formato que o resto do app usa para
+        confirmacao (avisar/confirmar em acessos.py, cofre.py etc.). Um
+        Gtk.MessageDialog cru ignora o CSS do app e destoa visualmente do
+        resto da interface; dialogo_ui.confirmar() e um Gtk.Dialog comum
+        que obedece a folha de estilo, e se degrada graciosamente (visual
+        neutro) quando chamado fora do acessos.py, por exemplo em teste
+        isolado deste modulo."""
+        dialogo_ui.liberar_grab()
+        pai = self.get_toplevel()
+        if not isinstance(pai, Gtk.Window):
+            pai = None
+        linhas = [
+            "A autenticidade do host '%s' não pode ser verificada "
+            "automaticamente (certificado desconhecido ou autoassinado)."
+            % (host or "?"),
+            "",
+            "Confira a impressão digital abaixo com o administrador antes "
+            "de continuar, se não tiver certeza.",
+        ]
+        if digital:
+            linhas += ["", "Impressão digital:", digital]
+        return dialogo_ui.confirmar(
+            pai, "Confirmar certificado de %s?" % (host or "este host"),
+            "\n".join(linhas), ok="Confiar e conectar", cancelar="Cancelar")
+
+    # ------------------------------------------------------- clipboard
+    def _clip_mudou_no_host(self, clipboard, _event):
+        """Disparado quando o clipboard do HOST muda de dono. So texto por
+        enquanto — arquivos/imagens ficam para uma proxima rodada, se
+        precisar (o canal CLIPRDR e o mesmo, so falta o resto do
+        protocolo)."""
+        if self._sessao is None:
+            return
+        texto = clipboard.wait_for_text()
+        if texto is None or texto == self._texto_local_ultimo:
+            return
+        # o proprio texto que ACABAMOS de colocar no clipboard (vindo do
+        # remoto) tambem dispara este sinal — sem o "ultimo" acima
+        # entraria em eco: remoto -> host -> "mudou" -> de volta ao remoto.
+        codificado = texto.encode("utf-8")
+        _lib.rs_clipboard_definir_texto(self._sessao, codificado,
+                                        len(codificado))
+
+    def _c_clip_texto(self, _ctx, utf8, tam):
+        """Roda na THREAD DE REDE (chamada direto do hook C). So repassa
+        para o main loop — nunca mexer em GTK fora dele."""
+        try:
+            texto = ctypes.string_at(utf8, tam).decode("utf-8", "replace")
+        except Exception:
+            return
+        GLib.idle_add(self._aplicar_clip_do_remoto, texto)
+
+    def _aplicar_clip_do_remoto(self, texto):
+        self._texto_local_ultimo = texto
+        self._clip.set_text(texto, -1)
+        self._clip.store()
         return False
 
-    def _reportar_desconexao(self, codigo, texto):
-        self.emit("rdp-disconnected")
-        if codigo and texto:
-            self.emit("rdp-error", "%s (0x%08X)" % (texto, codigo))
+    def _c_disp_pronto(self, _ctx):
+        """Canal Display Control terminou o handshake (DisplayControlCaps
+        chegou) — roda na THREAD DE REDE, so repassa para o main loop.
+
+        Sem isto o primeiro pedido de ajuste (feito no size-allocate que
+        acontece logo ao abrir a aba) chegava CEDO DEMAIS: o canal ainda nao
+        tinha ouvido os limites do servidor, rs_pedir_resize devolvia 0
+        calado, e nada tentava de novo depois — a sessao ficava presa na
+        resolucao negociada na conexao ate o operador mexer manualmente no
+        botao 'Ajustar'. Agora, assim que o canal fica pronto, pedimos logo
+        o tamanho ATUAL da aba."""
+        GLib.idle_add(self._disp_ficou_pronto)
+
+    def _disp_ficou_pronto(self):
+        if self._escalar:
+            self._agendar_resize()
+        return False
+
+    def _perguntar_mudanca(self, host, digital):
+        """Mesmo formato dialogo_ui do _perguntar_novo. perigo=True pinta o
+        botao de confirmar em vermelho — risco maior que o certificado
+        novo, e o estilo (ja usado em toda confirmacao destrutiva do app)
+        deixa isso visualmente claro sem precisar de texto extra."""
+        dialogo_ui.liberar_grab()
+        pai = self.get_toplevel()
+        if not isinstance(pai, Gtk.Window):
+            pai = None
+        linhas = [
+            "Isso costuma acontecer quando a máquina é reinstalada ou o "
+            "certificado é regerado.",
+            "",
+            "Mas também é o que se veria se alguém estivesse interceptando "
+            "a conexão. Só aceite se você souber o motivo da mudança.",
+        ]
+        if digital:
+            linhas += ["", "Impressão digital nova:", digital]
+        return dialogo_ui.confirmar(
+            pai, "O certificado de %s mudou" % (host or "este host"),
+            "\n".join(linhas), ok="Aceitar novo certificado",
+            cancelar="Cancelar", perigo=True)
+
+    # --------------------------------------------- no thread principal
+    def _conectou(self):
+        self._conectado = True
+        if self._timer_splash is not None:
+            try:
+                GLib.source_remove(self._timer_splash)
+            except Exception:
+                pass
+        self._timer_splash = GLib.timeout_add(self._SPLASH_TETO_MS,
+                                              self._splash_teto)
+        self.emit("rdp-conectado")
+        return False
+
+    def _splash_teto(self):
+        """Teto de tempo do splash: cosmetico, entao nao vale a pena
+        segurar para sempre esperando N pinturas se o servidor demorar."""
+        self._timer_splash = None
+        if self._splash:
+            self._splash = False
+            self.queue_draw()
+        return False
+
+    def _falhou(self, msg):
+        self.emit("rdp-erro", msg)
+        return False
+
+    def _falhou_auth(self, msg):
+        self.emit("rdp-erro", "autenticação recusada: %s" % msg)
+        return False
+
+    def _caiu(self):
+        self._conectado = False
+        self.emit("rdp-desconectado")
+        return False
+
+    def _redimensionou(self, w, h):
+        with self._lock:
+            if self._sessao is None:
+                return False
+            ptr = _lib.rs_framebuffer(self._sessao)
+            if not ptr:
+                return False
+            self._remoto = (w, h)
+            stride = _lib.rs_stride(self._sessao) or \
+                cairo.ImageSurface.format_stride_for_width(cairo.FORMAT_RGB24, w)
+            self._buf = (ctypes.c_char * (stride * h)).from_address(ptr)
+            self._surface = cairo.ImageSurface.create_for_data(
+                memoryview(self._buf), cairo.FORMAT_RGB24, w, h, stride)
+        self.set_size_request(w, h)
+        self.queue_draw()
         return False
 
     def _bater(self):
-        """Relogio de repintura (~60/s), mesma logica do vncwidget.py."""
+        """Relogio de redesenho (~60fps), identico em espirito ao do VNC:
+        so pinta quando ha area suja, e nao ha flag que possa ficar presa."""
         if not self.get_mapped():
             with self._lock_sujo:
                 self._sujo_rect = None
             return True
-
         with self._lock_sujo:
             r = self._sujo_rect
             self._sujo_rect = None
+            pinturas = self._splash_pinturas
+        if self._splash and pinturas >= self._SPLASH_MIN_PINTURAS:
+            self._splash = False
+            if self._timer_splash is not None:
+                try:
+                    GLib.source_remove(self._timer_splash)
+                except Exception:
+                    pass
+                self._timer_splash = None
+            self.queue_draw()
         if r is None:
             return True
         with self._lock:
-            if self._sessao is None:
+            surf = self._surface
+            if surf is None:
                 return True
             lw, lh = self._remoto
             x0, y0, x1, y1 = r
             x0 = max(0, min(x0, lw)); x1 = max(x0, min(x1, lw))
             y0 = max(0, min(y0, lh)); y1 = max(y0, min(y1, lh))
-            larg = max(1, x1 - x0)
-            alt = max(1, y1 - y0)
-        self.queue_draw_area(x0, y0, larg, alt)
+            larg = max(1, x1 - x0); alt = max(1, y1 - y0)
+            try:
+                surf.mark_dirty_rectangle(x0, y0, larg, alt)
+            except Exception:
+                try:
+                    surf.mark_dirty()
+                except Exception:
+                    pass
+        if self._splash:
+            self.queue_draw()          # overlay cobre o widget inteiro
+        else:
+            self.queue_draw_area(x0, y0, larg, alt)
         return True
 
-    def _garantir_surface(self):
-        """Cria (ou recria, apos redimensionar) a Gtk.ImageSurface que
-        aponta DIRETO pro gdi->primary_buffer — sem copia por quadro,
-        mesma tecnica do vncwidget.py com o frameBuffer da libvncclient.
-
-        FORMATO: pedimos PIXEL_FORMAT_BGRX32 no shim (ver cb_post_connect
-        em rdpshim.c) — casa com cairo.FORMAT_RGB24 em little-endian
-        (bytes B,G,R,X na memoria), mesma logica de canal que o vncshim.c
-        documenta pro VNC."""
-        if self._sessao is None or _lib.rs_morto(self._sessao):
-            return None
-        if self._surface is not None:
-            return self._surface
-        w = _lib.rs_largura(self._sessao)
-        h = _lib.rs_altura(self._sessao)
-        if w <= 0 or h <= 0:
-            return None
-        ptr = _lib.rs_framebuffer(self._sessao)
-        if not ptr:
-            return None
-        stride = cairo.ImageSurface.format_stride_for_width(
-            cairo.FORMAT_RGB24, w)
-        buf = (ctypes.c_uint8 * (stride * h)).from_address(ptr)
-        self._surface = cairo.ImageSurface.create_for_data(
-            buf, cairo.FORMAT_RGB24, w, h, stride)
-        return self._surface
-
-    def _desenhar(self, _widget, cr):
+    def redesenhar_tudo(self):
         with self._lock:
-            surf = self._garantir_surface()
-            if surf is None:
-                return False
+            surf = self._surface
+            if surf is not None:
+                try:
+                    surf.mark_dirty()
+                except Exception:
+                    pass
+        self.queue_draw()
+
+    # ------------------------------------------------------- desenho
+    def _desenhar(self, _w, ctx):
+        ctx.set_source_rgb(0, 0, 0)
+        ctx.paint()
+        if self._splash:
+            self._desenhar_splash(ctx)
+            return False
+        with self._lock:
+            surf = self._surface
+        if surf is None:
+            return False
+        ctx.set_source_surface(surf, 0, 0)
+        ctx.paint()
+        return False
+
+    def _desenhar_splash(self, ctx):
+        """Overlay mostrado entre 'rdp-conectado' e o desktop de verdade
+        aparecer — ver o comentario em __init__ sobre o BRANCO->PRETO que o
+        proprio Windows produz nesse intervalo."""
+        alloc = self.get_allocation()
+        largura, altura = alloc.width, alloc.height
+        texto = "Conectando…"
+        ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL,
+                             cairo.FONT_WEIGHT_NORMAL)
+        ctx.set_font_size(16)
+        extensao = ctx.text_extents(texto)
+        ctx.set_source_rgb(0.75, 0.75, 0.75)
+        ctx.move_to((largura - extensao.width) / 2.0 - extensao.x_bearing,
+                    (altura - extensao.height) / 2.0 - extensao.y_bearing)
+        ctx.show_text(texto)
+
+    # -------------------------------------------------------- entrada
+    def _botao(self, _w, ev):
+        if self._sessao is None:
+            return False
+        self.grab_focus()
+        botao = {1: 1, 2: 2, 3: 3}.get(ev.button, 0)
+        if not botao:
+            return False
+        pressionado = 1 if ev.type == Gdk.EventType.BUTTON_PRESS else 0
+        _lib.rs_ponteiro_botao(self._sessao, int(ev.x), int(ev.y), botao,
+                               pressionado)
+        return True
+
+    def _movimento(self, _w, ev):
+        if self._sessao is None:
+            return False
+        _lib.rs_ponteiro_mover(self._sessao, int(ev.x), int(ev.y))
+        return True
+
+    def _roda(self, _w, ev):
+        if self._sessao is None:
+            return False
+        mapa = {Gdk.ScrollDirection.UP: (0, 1), Gdk.ScrollDirection.DOWN: (0, -1),
+                Gdk.ScrollDirection.LEFT: (1, -1), Gdk.ScrollDirection.RIGHT: (1, 1)}
+        par = mapa.get(ev.direction)
+        if not par:
+            return False
+        eixo, passos = par
+        _lib.rs_ponteiro_roda(self._sessao, eixo, passos)
+        return True
+
+    def _enviar_tecla(self, codigo, pressionada):
+        """Chama rs_tecla com a assinatura certa pra cada plataforma.
+
+        Windows: hardware_keycode do GDK ja E o scancode PS/2 Set 1 cru
+        (backend Win32 do GDK entrega bruto, sem traducao); so falta dizer
+        se e uma tecla "estendida" (setas, Insert/Delete/Home/End, teclado
+        numerico da direita, Ctrl/Alt direito, tecla Windows, Print Screen —
+        ver _TECLAS_ESTENDIDAS_WIN32), porque o PS/2 usa o mesmo scancode
+        base pras duas variantes e diferencia so por esse bit extra.
+
+        Linux: hardware_keycode e keycode X11; rs_tecla (rdpshim.c) faz a
+        traducao via WinPR (GetVirtualKeyCodeFromKeycode/
+        GetVirtualScanCodeFromVirtualKeyCode), entao so repassa cru."""
+        if sys.platform == "win32":
+            estendida = 1 if codigo in _TECLAS_ESTENDIDAS_WIN32 else 0
+            _lib.rs_tecla(self._sessao, codigo, estendida,
+                          1 if pressionada else 0)
+        else:
+            _lib.rs_tecla(self._sessao, codigo, 1 if pressionada else 0)
+
+    def _tecla(self, _w, ev):
+        if self._sessao is None:
+            return False
+        pressionada = ev.type == Gdk.EventType.KEY_PRESS
+        codigo = ev.hardware_keycode
+        if pressionada:
+            self._teclas_presas.add(codigo)
+        else:
+            self._teclas_presas.discard(codigo)
+        self._enviar_tecla(codigo, pressionada)
+        return True
+
+    def soltar_teclas(self):
+        if self._sessao is None:
+            self._teclas_presas.clear()
+            return
+        for codigo in sorted(self._teclas_presas, reverse=True):
             try:
-                surf.mark_dirty()
+                self._enviar_tecla(codigo, False)
             except Exception:
                 pass
-            cr.set_source_surface(surf, 0, 0)
-            cr.paint()
+        self._teclas_presas.clear()
+
+    def _perdeu_foco(self, *_a):
+        # soltar o grab junto: teclado preso com a janela em segundo plano
+        # deixa o operador sem teclado no resto do sistema (mesma licao do
+        # VncWidget)
+        self._soltar_seat()
+        self.soltar_teclas()
         return False
 
-    def _conectou(self):
-        self.emit("rdp-connected")
+    def _entrou(self, _w, _ev):
+        if not self.has_focus():
+            self.grab_focus()
         return False
 
-    def _caiu(self):
-        self.emit("rdp-disconnected")
-        return False
+    # -------------------------------------------------------- consultas
+    def conectado(self):
+        return self._conectado and self._sessao is not None
 
-    # ---------------------------------------------------------- entrada
-    def _tecla(self, _widget, ev):
-        pressionada = (ev.type == Gdk.EventType.KEY_PRESS)
-        estendida = ev.keyval in _TECLAS_ESTENDIDAS
-        if self._sessao is not None:
-            _lib.rs_tecla(self._sessao, int(ev.hardware_keycode),
-                         1 if estendida else 0, 1 if pressionada else 0)
-        return True
+    def tamanho_remoto(self):
+        return self._remoto
 
-    def _perdeu_foco(self, _widget, _ev):
-        # Sem captura total de teclado nesta v1 (ver TODO em
-        # RDPSHIM-interno.md) — nada de modificador pra soltar aqui
-        # ainda, mas o handler fica pronto pro dia que precisar (mesmo
-        # cuidado que o VNC tem hoje com Ctrl/Alt presos).
-        return False
-
-    def _botao_flags(self, ev):
-        if ev.button == 1:
-            return PTR_FLAGS_BUTTON1
-        if ev.button == 2:
-            return PTR_FLAGS_BUTTON3
-        if ev.button == 3:
-            return PTR_FLAGS_BUTTON2
-        return 0
-
-    def _botao(self, _widget, ev):
+    def focar(self):
         self.grab_focus()
-        flags = self._botao_flags(ev)
-        if not flags:
+
+    def definir_escala(self, ligado):
+        """Compat com o botao 'Ajustar' da AbaRdpEmbutido.
+
+        Ao ligar, pede logo um resize para o tamanho atual da aba — sem
+        esperar o proximo size-allocate, que so vem de um redimensionamento
+        de verdade da janela."""
+        self._escalar = bool(ligado)
+        if self._escalar:
+            self._agendar_resize()
+
+    def _realocou(self, _w, alocacao):
+        if not self._escalar or not self._conectado:
+            return
+        self._agendar_resize(alocacao.width, alocacao.height)
+
+    def _agendar_resize(self, largura=None, altura=None):
+        """Debounce: durante o arrasto da borda chegam dezenas de
+        size-allocate por segundo — pedir resize a cada um inundaria o
+        canal Display Control com pedidos que o servidor mal termina de
+        processar antes do proximo chegar (mesma licao do gtk-frdp original,
+        SELECT_TIMEOUT/redesenho a parte)."""
+        if largura is None:
+            alocacao = self.get_allocation()
+            largura, altura = alocacao.width, alocacao.height
+        if largura < 50 or altura < 50:
+            return          # ainda sem alocacao util (aba trocando de pagina)
+        self._pedido_pendente = (largura, altura)
+        if self._timer_resize is not None:
+            try:
+                GLib.source_remove(self._timer_resize)
+            except Exception:
+                pass
+        self._timer_resize = GLib.timeout_add(350, self._aplicar_resize)
+
+    def _aplicar_resize(self):
+        self._timer_resize = None
+        if self._sessao is None or not self._escalar:
             return False
-        if ev.type == Gdk.EventType.BUTTON_PRESS:
-            flags |= PTR_FLAGS_DOWN
-        if self._sessao is not None:
-            _lib.rs_ponteiro(self._sessao, int(ev.x), int(ev.y), flags)
-        return True
+        largura, altura = self._pedido_pendente
+        if (largura, altura) == self._ultimo_pedido:
+            return False    # mesmo tamanho de antes, nao repete o pedido
+        if _lib.rs_pedir_resize(self._sessao, largura, altura):
+            self._ultimo_pedido = (largura, altura)
+        return False
 
-    def _movimento(self, _widget, ev):
-        if self._sessao is not None:
-            _lib.rs_ponteiro(self._sessao, int(ev.x), int(ev.y),
-                            PTR_FLAGS_MOVE)
-        return True
+    def set_keyboard_grab(self, ligado):
+        """Captura de teclado via GdkSeat — MESMO mecanismo que o
+        VncWidget usa (ver vncwidget.py::set_keyboard_grab). Sem isto,
+        atalhos como Super e Alt+Tab iam para o gerenciador de janelas do
+        HOST em vez de para a sessao remota.
 
-    def _roda(self, _widget, ev):
-        if self._sessao is None:
-            return True
-        # magnitude 120 = um "clique" de roda (MS-RDPBCGR); sem suporte a
-        # rolagem fina (SMOOTH_SCROLL) nesta v1.
-        flags = PTR_FLAGS_WHEEL | 0x78
-        if ev.direction == Gdk.ScrollDirection.DOWN:
-            flags |= PTR_FLAGS_WHEEL_NEGATIVE
-        elif ev.direction != Gdk.ScrollDirection.UP:
-            return True
-        _lib.rs_ponteiro(self._sessao, int(ev.x), int(ev.y), flags)
-        return True
+        KEYBOARD apenas: capturar o ponteiro junto prenderia o cursor
+        dentro da janela, o que atrapalha em vez de ajudar."""
+        self._capturando = bool(ligado)
+        if not ligado:
+            self._soltar_seat()
+            return
+        self.grab_focus()
+        jan = self.get_window()
+        if jan is None:
+            return
+        try:
+            seat = self.get_display().get_default_seat()
+        except Exception:
+            self._seat_grab = None
+            return
+        cap = Gdk.SeatCapabilities.KEYBOARD
+        # A assinatura de Gdk.Seat.grab varia entre versoes do PyGObject —
+        # tentamos as duas formas, como no VncWidget.
+        for args in ((jan, cap, True, None, None, None, None),
+                     (jan, cap, True, None, None, None)):
+            try:
+                res = seat.grab(*args)
+            except TypeError:
+                continue
+            except Exception:
+                break
+            self._seat_grab = seat if res == Gdk.GrabStatus.SUCCESS else None
+            return
+        self._seat_grab = None
+
+    def _soltar_seat(self):
+        seat, self._seat_grab = getattr(self, "_seat_grab", None), None
+        if seat is not None:
+            try:
+                seat.ungrab()
+            except Exception:
+                pass
